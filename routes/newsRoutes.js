@@ -173,7 +173,8 @@ router.get('/ujala', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const query = { isUjala: true, category: 'ujala', approved: true };
+    // List any item that has been marked as Ujala and approved — don't rely on category string
+    const query = { isUjala: true, approved: true };
     const total = await News.countDocuments(query);
     // sort breaking items first, then by newest
     const docs = await News.find(query)
@@ -183,6 +184,71 @@ router.get('/ujala', async (req, res) => {
     res.json({ success: true, data: docs, pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Public share preview page for social platforms (Open Graph meta tags)
+// Example: GET /api/news/share/:slug
+router.get('/share/:slug', async (req, res) => {
+  try {
+    const rawSlug = String(req.params.slug || '');
+    if (!rawSlug) return res.status(400).send('Bad Request');
+
+    const item = await News.findOne({ slug: rawSlug });
+    if (!item) return res.status(404).send('Not found');
+
+    // derive origin (prefer configured SERVER_URL for production)
+    const origin = (process.env.SERVER_URL && process.env.SERVER_URL.replace(/\/$/, '')) || `${req.protocol}://${req.get('host')}`;
+
+    const makeAbsolute = (p) => {
+      if (!p) return '';
+      if (/^https?:\/\//i.test(p)) return p;
+      const path = p.startsWith('/') ? p : '/' + p;
+      return origin + path;
+    };
+
+    const title = (item.title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const description = (item.description || item.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const pageUrl = (process.env.FRONTEND_URL || origin).replace(/\/$/, '') + `/news/${item.slug}`;
+    const image = makeAbsolute(item.imageUrl || item.imagePath || '');
+    const video = makeAbsolute(item.videoUrl || item.videoPath || '');
+
+    const isVideo = Boolean(item.videoUrl || item.videoPath);
+
+    // minimal HTML with OG tags — social platforms will fetch these when a URL is shared
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <meta property="og:title" content="${title}" />
+  <meta property="og:description" content="${description}" />
+  <meta property="og:url" content="${pageUrl}" />
+  <meta property="og:type" content="${isVideo ? 'video.other' : 'article'}" />
+  ${image ? `<meta property="og:image" content="${image}" />` : ''}
+  ${image ? `<meta name="twitter:image" content="${image}" />` : ''}
+  ${isVideo ? `<meta property="og:video" content="${video}" />` : ''}
+  ${isVideo ? `<meta property="og:video:secure_url" content="${video}" />` : ''}
+  ${isVideo ? `<meta property="og:video:type" content="video/mp4" />` : ''}
+  <meta name="twitter:card" content="${isVideo ? 'player' : 'summary_large_image'}" />
+  <meta name="twitter:title" content="${title}" />
+  <meta name="twitter:description" content="${description}" />
+  <meta name="twitter:url" content="${pageUrl}" />
+  <link rel="canonical" href="${pageUrl}" />
+</head>
+<body>
+  <p>Redirecting to <a href="${pageUrl}">${pageUrl}</a></p>
+  <script>try{location.replace('${pageUrl}')}catch(e){}</script>
+</body>
+</html>`;
+
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('Error in /share/:slug', err);
+    res.status(500).send('Server error');
   }
 });
 
@@ -202,7 +268,21 @@ router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superad
     const id = req.params.id;
     const item = await News.findById(id);
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+    // mark as approved and ensure it is categorized correctly for ujala
     item.approved = true;
+    item.isUjala = true;
+    // If this news was created by a reporter, keep/set the category to 'Moradabad ujala'
+    // Also, if category was already a ujala-like value, normalize to 'Moradabad ujala'.
+    try {
+      const existingCat = (item.category || '').toString().trim();
+      if (item.reporterId || /ujala/i.test(existingCat)) {
+        item.category = 'Moradabad ujala';
+      } else if (!existingCat) {
+        item.category = 'Moradabad ujala';
+      }
+    } catch (e) {
+      item.category = 'Moradabad ujala';
+    }
     // mark as breaking so it appears at top of ujala listing
     item.isBreaking = true;
     await item.save();
