@@ -376,6 +376,12 @@ router.delete('/:id', verifyToken, requireRole('superadmin'), async (req, res) =
 // Get featured news (LIVE)
 router.get('/featured', async (req, res) => {
   try {
+    // If no API key is configured, return an empty array instead of failing
+    if (!newsAPIService.apiKey) {
+      console.warn('No NEWS_API_KEY configured; /api/news/featured returning empty list');
+      return res.json({ success: true, data: [], source: 'live-api', message: 'No API key configured; returning empty featured list' });
+    }
+
     const news = await newsAPIService.fetchFeaturedNews(6);
 
     res.json({
@@ -385,6 +391,7 @@ router.get('/featured', async (req, res) => {
       message: 'Live featured news from multiple categories'
     });
   } catch (error) {
+    console.error('Error in GET /api/news/featured', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
