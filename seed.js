@@ -27,6 +27,7 @@ const categories = [
   { name: 'Auto', slug: 'auto', order: 11 },
   { name: 'Religion', slug: 'religion', order: 12 },
   { name: 'Ujala News', slug: 'ujala', order: 13 },
+  { name: 'Moradabad Ujala', slug: 'moradabad-ujala', order: 14 },
 ];
 
 const sampleNews = [

@@ -36,7 +36,8 @@ const newsSchema = new mongoose.Schema(
         'lifestyle',
         'auto',
         'religion',
-        'ujala'
+        'ujala',
+        'Moradabad ujala'
       ],
     },
     imageUrl: {
