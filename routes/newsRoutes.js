@@ -513,7 +513,9 @@ router.get('/:slug', async (req, res) => {
         if (dbItem.isUjala && !dbItem.approved) {
           return res.status(404).json({ success: false, message: 'News not found' });
         }
-        return res.json({ success: true, data: dbItem, source: 'database', message: 'News detail from database' });
+
+          // Return the document without incrementing here. Use dedicated endpoint to increment views
+          return res.json({ success: true, data: dbItem, source: 'database', message: 'News detail from database' });
       }
     } catch (dbErr) {
       // continue to live API search if DB lookup fails
@@ -570,4 +572,21 @@ router.post('/cache/clear', (req, res) => {
   }
 });
 
+// Increment views for a news item (id-based). This endpoint is intentionally
+// separate from the GET detail endpoint to avoid duplicate increments due to
+// client-side duplicate requests (eg. React StrictMode double-mounts).
+router.post('/:id/view', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const updated = await News.findByIdAndUpdate(id, { $inc: { views: 1 } }, { new: true });
+    if (!updated) return res.status(404).json({ success: false, message: 'Not found' });
+    res.json({ success: true, data: { views: updated.views } });
+  } catch (err) {
+    console.error('Error incrementing views', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;
+
