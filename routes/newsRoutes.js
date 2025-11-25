@@ -90,9 +90,9 @@ router.get('/breaking', async (req, res) => {
 // --- DB-backed Ujala/admin/superadmin endpoints ---
 
 // Admin upload form endpoint (admin token required)
-router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
+router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }, { name: 'galleryImages', maxCount: 10 }]), async (req, res) => {
   try {
-    const { title, description, content, author, location } = req.body;
+    const { title, description, content, author, location, type } = req.body;
     if (!title || !description || !content) return res.status(400).json({ success: false, message: 'Missing required fields' });
 
     const news = new News({
@@ -100,8 +100,11 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
       description,
       content,
       author: author || 'Moradabad Ujala Team',
-      category: 'ujala',
+      // allow admin to create normal ujala, gallery or event
+      category: (type === 'gallery') ? 'ujala gallery' : (type === 'event') ? 'ujala events' : 'ujala',
       isUjala: true,
+      isGallery: type === 'gallery',
+      isEvent: type === 'event',
       approved: false,
       location: location || '',
     });
@@ -110,6 +113,7 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
     if (req.files) {
       const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : undefined;
       const videoFile = Array.isArray(req.files.video) ? req.files.video[0] : undefined;
+      const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
       if (imageFile) {
         news.imagePath = `/uploads/${imageFile.filename}`;
         news.imageUrl = news.imagePath;
@@ -118,7 +122,16 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
         news.videoPath = `/uploads/${videoFile.filename}`;
         news.videoUrl = news.videoPath;
       }
+      if (gallery && gallery.length > 0) {
+        news.galleryImages = gallery.map(f => `/uploads/${f.filename}`);
+      }
     }
+    // event-specific fields
+    if (req.body.eventDate) {
+      const d = new Date(req.body.eventDate);
+      if (!isNaN(d)) news.eventDate = d;
+    }
+    if (req.body.eventVenue) news.eventVenue = req.body.eventVenue;
 
     await news.save();
     res.json({ success: true, message: 'News uploaded and pending approval', data: news });
@@ -128,9 +141,9 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
 });
 
 // Reporter upload endpoint (reporters submit news for approval)
-router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
+router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }, { name: 'galleryImages', maxCount: 10 }]), async (req, res) => {
   try {
-    const { title, description, content, author, location } = req.body;
+    const { title, description, content, author, location, type } = req.body;
     if (!title || !description || !content) return res.status(400).json({ success: false, message: 'Missing required fields' });
 
     const news = new News({
@@ -139,8 +152,11 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
       content,
       // prefer provided author, else use name from token if available
       author: author || (req.user && req.user.name) || 'Reporter',
-      category: 'Moradabad ujala',
+      // reporters can submit normal ujala, gallery, or event; use Moradabad ujala naming
+      category: (type === 'gallery') ? 'ujala gallery' : (type === 'event') ? 'ujala events' : 'Moradabad ujala',
       isUjala: true,
+      isGallery: type === 'gallery',
+      isEvent: type === 'event',
       approved: false,
       location: location || '',
     });
@@ -148,6 +164,7 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
     if (req.files) {
       const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : undefined;
       const videoFile = Array.isArray(req.files.video) ? req.files.video[0] : undefined;
+      const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
       if (imageFile) {
         news.imagePath = `/uploads/${imageFile.filename}`;
         news.imageUrl = news.imagePath;
@@ -156,7 +173,16 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
         news.videoPath = `/uploads/${videoFile.filename}`;
         news.videoUrl = news.videoPath;
       }
+      if (gallery && gallery.length > 0) {
+        news.galleryImages = gallery.map(f => `/uploads/${f.filename}`);
+      }
     }
+    // event-specific fields
+    if (req.body.eventDate) {
+      const d = new Date(req.body.eventDate);
+      if (!isNaN(d)) news.eventDate = d;
+    }
+    if (req.body.eventVenue) news.eventVenue = req.body.eventVenue;
 
     // Attach reporter id if available
     if (req.user && req.user.id) news.reporterId = req.user.id;
@@ -187,6 +213,40 @@ router.get('/ujala', async (req, res) => {
   }
 });
 
+// Public ujala gallery listing (only approved gallery items)
+router.get('/ujala-gallery', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const query = { isUjala: true, approved: true, isGallery: true };
+    const total = await News.countDocuments(query);
+    const docs = await News.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+    res.json({ success: true, data: docs, pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Public ujala events listing (only approved event items)
+router.get('/ujala-events', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const query = { isUjala: true, approved: true, isEvent: true };
+    const total = await News.countDocuments(query);
+    const docs = await News.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+    res.json({ success: true, data: docs, pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Public share preview page for social platforms (Open Graph meta tags)
 // Example: GET /api/news/share/:slug
 router.get('/share/:slug', async (req, res) => {
@@ -209,8 +269,14 @@ router.get('/share/:slug', async (req, res) => {
 
     const title = (item.title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const description = (item.description || item.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const pageUrl = (process.env.FRONTEND_URL || origin).replace(/\/$/, '') + `/news/${item.slug}`;
-    const image = makeAbsolute(item.imageUrl || item.imagePath || '');
+    const frontendBase = (process.env.FRONTEND_URL || origin).replace(/\/$/, '');
+    const pageUrl = frontendBase + `/news/${item.slug}`;
+
+    // Determine fallback OG image: preference order -> item image/video thumbnail -> configured DEFAULT_OG_IMAGE -> a placeholder under public
+    const defaultOg = (process.env.DEFAULT_OG_IMAGE || '').trim();
+    let image = makeAbsolute(item.imageUrl || item.imagePath || '');
+    if (!image && defaultOg) image = makeAbsolute(defaultOg);
+    if (!image) image = makeAbsolute('/placeholder.svg');
     const video = makeAbsolute(item.videoUrl || item.videoPath || '');
 
     const isVideo = Boolean(item.videoUrl || item.videoPath);
@@ -223,6 +289,8 @@ router.get('/share/:slug', async (req, res) => {
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${title}</title>
+  <meta property="og:site_name" content="Moradabad Ujala" />
+  <meta name="twitter:site" content="@MoradabadUjala" />
   <meta property="og:title" content="${title}" />
   <meta property="og:description" content="${description}" />
   <meta property="og:url" content="${pageUrl}" />
@@ -262,6 +330,26 @@ router.get('/superadmin/approval', verifyToken, requireRole('superadmin'), async
   }
 });
 
+// Superadmin: list pending gallery submissions
+router.get('/superadmin/approval/gallery', verifyToken, requireRole('superadmin'), async (req, res) => {
+  try {
+    const pending = await News.find({ isUjala: true, approved: false, isGallery: true }).sort({ createdAt: -1 });
+    res.json({ success: true, data: pending });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Superadmin: list pending event submissions
+router.get('/superadmin/approval/events', verifyToken, requireRole('superadmin'), async (req, res) => {
+  try {
+    const pending = await News.find({ isUjala: true, approved: false, isEvent: true }).sort({ createdAt: -1 });
+    res.json({ success: true, data: pending });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Superadmin: approve a news item
 router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superadmin'), async (req, res) => {
   try {
@@ -275,7 +363,12 @@ router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superad
     // Also, if category was already a ujala-like value, normalize to 'Moradabad ujala'.
     try {
       const existingCat = (item.category || '').toString().trim();
-      if (item.reporterId || /ujala/i.test(existingCat)) {
+      // preserve gallery/event flags and categories when applicable
+      if (item.isGallery) {
+        item.category = 'ujala gallery';
+      } else if (item.isEvent) {
+        item.category = 'ujala events';
+      } else if (item.reporterId || /ujala/i.test(existingCat)) {
         item.category = 'Moradabad ujala';
       } else if (!existingCat) {
         item.category = 'Moradabad ujala';
@@ -292,10 +385,68 @@ router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superad
   }
 });
 
+// Superadmin: approve a gallery item explicitly
+router.put('/superadmin/approval/:id/approve/gallery', verifyToken, requireRole('superadmin'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const item = await News.findById(id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+    item.approved = true;
+    item.isUjala = true;
+    item.isGallery = true;
+    item.isEvent = false;
+    item.category = 'ujala gallery';
+    item.isBreaking = true;
+    await item.save();
+    res.json({ success: true, message: 'Gallery approved', data: item });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Superadmin: approve an event item explicitly
+router.put('/superadmin/approval/:id/approve/event', verifyToken, requireRole('superadmin'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const item = await News.findById(id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+    item.approved = true;
+    item.isUjala = true;
+    item.isEvent = true;
+    item.isGallery = false;
+    item.category = 'ujala events';
+    item.isBreaking = true;
+    await item.save();
+    res.json({ success: true, message: 'Event approved', data: item });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Superadmin: list all approved ujala news (for management)
 router.get('/admin/approved-news', verifyToken, requireRole('superadmin'), async (req, res) => {
   try {
     const items = await News.find({ isUjala: true, approved: true }).sort({ createdAt: -1 });
+    res.json({ success: true, data: items });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin (and superadmin): list all approved ujala gallery items
+router.get('/admin/approved-gallery', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
+  try {
+    const items = await News.find({ isUjala: true, approved: true, isGallery: true }).sort({ createdAt: -1 });
+    res.json({ success: true, data: items });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin (and superadmin): list all approved ujala event items
+router.get('/admin/approved-events', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
+  try {
+    const items = await News.find({ isUjala: true, approved: true, isEvent: true }).sort({ createdAt: -1 });
     res.json({ success: true, data: items });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -329,6 +480,96 @@ router.put('/admin/approved-news/:id/unfeature', verifyToken, requireRole('super
     item.featuredAt = undefined;
     await item.save();
     res.json({ success: true, message: 'Removed from featured', data: item });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin/Superadmin: mark an approved gallery as featured (show on home)
+router.put('/admin/approved-gallery/:id/feature', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const item = await News.findById(id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+    item.isFeatured = true;
+    item.featuredAt = new Date();
+    await item.save();
+    res.json({ success: true, message: 'Marked as featured', data: item });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin/Superadmin: unmark gallery featured
+router.put('/admin/approved-gallery/:id/unfeature', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const item = await News.findById(id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+    item.isFeatured = false;
+    item.featuredAt = undefined;
+    await item.save();
+    res.json({ success: true, message: 'Removed from featured', data: item });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin/Superadmin: delete approved gallery
+router.delete('/admin/approved-gallery/:id', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const item = await News.findByIdAndDelete(id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+
+    // best-effort cleanup of media files
+    try {
+      const publicDir = path.join(__dirname, '..', 'public');
+      const unlinkIfExists = (urlPath) => {
+        if (!urlPath) return;
+        const rel = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
+        const fp = path.join(publicDir, rel);
+        fs.unlink(fp, (err) => { if (err && err.code !== 'ENOENT') console.warn('Failed to unlink file', fp, err.message); });
+      };
+      unlinkIfExists(item.imagePath);
+      unlinkIfExists(item.videoPath);
+    } catch (cleanupErr) {
+      console.warn('Cleanup error after deleting approved gallery', cleanupErr.message || cleanupErr);
+    }
+
+    res.json({ success: true, message: 'Approved gallery deleted' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin/Superadmin: delete approved event
+router.delete('/admin/approved-events/:id', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const item = await News.findByIdAndDelete(id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+
+    // best-effort cleanup of media files
+    try {
+      const publicDir = path.join(__dirname, '..', 'public');
+      const unlinkIfExists = (urlPath) => {
+        if (!urlPath) return;
+        const rel = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
+        const fp = path.join(publicDir, rel);
+        fs.unlink(fp, (err) => { if (err && err.code !== 'ENOENT') console.warn('Failed to unlink file', fp, err.message); });
+      };
+      unlinkIfExists(item.imagePath);
+      unlinkIfExists(item.videoPath);
+    } catch (cleanupErr) {
+      console.warn('Cleanup error after deleting approved event', cleanupErr.message || cleanupErr);
+    }
+
+    res.json({ success: true, message: 'Approved event deleted' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

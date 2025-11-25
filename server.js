@@ -50,6 +50,29 @@ app.use('/api/users', userRoutes);
 // Serve uploads statically
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
 
+// Legacy share redirects: support old shared links that omit the /api/news prefix
+// Redirect `/share/:slug` -> `/api/news/share/:slug`
+app.get('/share/:slug', (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    if (!slug) return res.status(400).send('Bad Request');
+    return res.redirect(301, `/api/news/share/${encodeURIComponent(slug)}`);
+  } catch (err) {
+    return res.status(500).send('Server error');
+  }
+});
+
+// Support frontend builds that may call `/api/share/:slug` (missing `/news` segment)
+app.get('/api/share/:slug', (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    if (!slug) return res.status(400).json({ success: false, message: 'Bad Request' });
+    return res.redirect(301, `/api/news/share/${encodeURIComponent(slug)}`);
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);

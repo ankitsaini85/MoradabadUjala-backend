@@ -37,7 +37,9 @@ const newsSchema = new mongoose.Schema(
         'auto',
         'religion',
         'ujala',
-        'Moradabad ujala'
+        'Moradabad ujala',
+        'ujala gallery',
+        'ujala events'
       ],
     },
     imageUrl: {
@@ -46,6 +48,11 @@ const newsSchema = new mongoose.Schema(
     },
     imagePath: {
       type: String,
+    },
+    // For gallery posts: store multiple image URLs/paths
+    galleryImages: {
+      type: [String],
+      default: [],
     },
     location: {
       type: String,
@@ -58,6 +65,22 @@ const newsSchema = new mongoose.Schema(
     isUjala: {
       type: Boolean,
       default: false,
+    },
+    // Flags for special Ujala subtypes
+    isGallery: {
+      type: Boolean,
+      default: false,
+    },
+    isEvent: {
+      type: Boolean,
+      default: false,
+    },
+    // Event-specific fields
+    eventDate: {
+      type: Date,
+    },
+    eventVenue: {
+      type: String,
     },
     approved: {
       type: Boolean,
