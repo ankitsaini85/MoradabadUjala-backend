@@ -109,8 +109,8 @@ const newsSchema = new mongoose.Schema(
   }
 );
 
-// Auto-generate slug from title
-newsSchema.pre('save', function (next) {
+// Auto-generate slug from title (ensure uniqueness)
+newsSchema.pre('save', async function (next) {
   // Ensure a shortId exists for prettier share links
   try {
     if (!this.shortId) {
@@ -122,7 +122,24 @@ newsSchema.pre('save', function (next) {
   } catch (e) {
     // ignore shortId generation failures
   }
+
   if (this.isModified('title')) {
+    // helper to ensure uniqueness by checking DB and appending a short suffix
+    const ensureUnique = async (baseSlug) => {
+      const Model = this.constructor;
+      let candidate = baseSlug;
+      let attempts = 0;
+      while (attempts < 10) {
+        const found = await Model.findOne({ slug: candidate }).select('_id').lean();
+        if (!found) return candidate;
+        if (this._id && found._id && String(found._id) === String(this._id)) return candidate;
+        const suffix = Math.random().toString(36).slice(2, 6);
+        candidate = `${baseSlug}-${suffix}`;
+        attempts++;
+      }
+      return `${baseSlug}-${Date.now().toString(36)}`;
+    };
+
     try {
       // Preserve Unicode letters (e.g., Hindi) when generating slugs.
       // Normalize to separate diacritics, remove combining marks, then strip anything
@@ -132,21 +149,17 @@ newsSchema.pre('save', function (next) {
       // allow Unicode letters (\p{L}) and numbers (\p{N}), spaces and hyphens
       slug = slug.replace(/[^\p{L}\p{N}\s-]+/gu, '');
       slug = slug.replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
-      // fallback if slug is empty (e.g., title had only unsupported characters)
-      if (!slug) {
-        slug = 'item-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
-      }
-      this.slug = slug;
+      if (!slug) slug = 'item-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
+      this.slug = await ensureUnique(slug);
     } catch (e) {
-      // In case the runtime doesn't support Unicode property escapes, fall back
-      // to a basic ASCII-safe slug and a fallback unique id if empty.
+      // Fallback for environments without Unicode property escapes
       let slug = String(this.title).toLowerCase()
         .replace(/[^\w\s-]/g, '')
         .replace(/\s+/g, '-')
         .replace(/-+/g, '-')
         .trim();
       if (!slug) slug = 'item-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
-      this.slug = slug;
+      this.slug = await ensureUnique(slug);
     }
   }
   next();

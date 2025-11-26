@@ -583,6 +583,14 @@ router.delete('/admin/approved-gallery/:id', verifyToken, requireRole(['admin','
       };
       unlinkIfExists(item.imagePath);
       unlinkIfExists(item.videoPath);
+      // Remove any gallery images
+      try {
+        if (Array.isArray(item.galleryImages)) {
+          item.galleryImages.forEach(p => unlinkIfExists(p));
+        }
+      } catch (e) {
+        console.warn('Failed unlinking gallery images', e && e.message);
+      }
     } catch (cleanupErr) {
       console.warn('Cleanup error after deleting approved gallery', cleanupErr.message || cleanupErr);
     }
@@ -612,6 +620,14 @@ router.delete('/admin/approved-events/:id', verifyToken, requireRole(['admin','s
       };
       unlinkIfExists(item.imagePath);
       unlinkIfExists(item.videoPath);
+      // Remove any gallery images
+      try {
+        if (Array.isArray(item.galleryImages)) {
+          item.galleryImages.forEach(p => unlinkIfExists(p));
+        }
+      } catch (e) {
+        console.warn('Failed unlinking gallery images', e && e.message);
+      }
     } catch (cleanupErr) {
       console.warn('Cleanup error after deleting approved event', cleanupErr.message || cleanupErr);
     }
@@ -641,6 +657,14 @@ router.delete('/admin/approved-news/:id', verifyToken, requireRole('superadmin')
       };
       unlinkIfExists(item.imagePath);
       unlinkIfExists(item.videoPath);
+      // Remove any gallery images
+      try {
+        if (Array.isArray(item.galleryImages)) {
+          item.galleryImages.forEach(p => unlinkIfExists(p));
+        }
+      } catch (e) {
+        console.warn('Failed unlinking gallery images', e && e.message);
+      }
     } catch (cleanupErr) {
       console.warn('Cleanup error after deleting approved news', cleanupErr.message || cleanupErr);
     }
@@ -666,7 +690,8 @@ router.get('/featured-db', async (req, res) => {
 });
 
 // Update a news item (admin or superadmin) - supports replacing image
-router.put('/:id', verifyToken, requireRole('admin'), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
+// Allow admins to update news and replace image/video/gallery files
+router.put('/:id', verifyToken, requireRole('admin'), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }, { name: 'galleryImages', maxCount: 10 }]), async (req, res) => {
   try {
     const id = req.params.id;
     const item = await News.findById(id);
@@ -683,6 +708,7 @@ router.put('/:id', verifyToken, requireRole('admin'), upload.fields([{ name: 'im
     if (req.files) {
       const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : undefined;
       const videoFile = Array.isArray(req.files.video) ? req.files.video[0] : undefined;
+      const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
       if (imageFile) {
         item.imagePath = `/uploads/${imageFile.filename}`;
         item.imageUrl = item.imagePath;
@@ -690,6 +716,12 @@ router.put('/:id', verifyToken, requireRole('admin'), upload.fields([{ name: 'im
       if (videoFile) {
         item.videoPath = `/uploads/${videoFile.filename}`;
         item.videoUrl = item.videoPath;
+      }
+      if (gallery && gallery.length > 0) {
+        // Append new gallery images to existing list (or replace depending on UI expectation)
+        const newPaths = gallery.map(f => `/uploads/${f.filename}`);
+        // Replace current gallery images with new ones (admin edit usually replaces selection)
+        item.galleryImages = newPaths;
       }
     }
 
@@ -729,6 +761,14 @@ router.delete('/:id', verifyToken, requireRole('superadmin'), async (req, res) =
 
       unlinkIfExists(item.imagePath);
       unlinkIfExists(item.videoPath);
+      // Remove any gallery images
+      try {
+        if (Array.isArray(item.galleryImages)) {
+          item.galleryImages.forEach(p => unlinkIfExists(p));
+        }
+      } catch (e) {
+        console.warn('Failed unlinking gallery images', e && e.message);
+      }
     } catch (unlinkErr) {
       // Don't fail the whole request if file deletion has issues; just log
       console.warn('Error while trying to remove media files for deleted news', unlinkErr);
