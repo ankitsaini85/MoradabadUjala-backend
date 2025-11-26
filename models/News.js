@@ -88,7 +88,7 @@ const newsSchema = new mongoose.Schema(
     },
     author: {
       type: String,
-      default: 'Aaj Tak Team',
+      default: 'Moradabad Ujala',
     },
     views: {
       type: Number,
@@ -122,12 +122,31 @@ const newsSchema = new mongoose.Schema(
 // Auto-generate slug from title
 newsSchema.pre('save', function (next) {
   if (this.isModified('title')) {
-    this.slug = this.title
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/--+/g, '-')
-      .trim();
+    try {
+      // Preserve Unicode letters (e.g., Hindi) when generating slugs.
+      // Normalize to separate diacritics, remove combining marks, then strip anything
+      // that's not a Unicode letter, number, space or hyphen.
+      let slug = String(this.title).toLowerCase();
+      if (slug.normalize) slug = slug.normalize('NFKD').replace(/\p{M}/gu, '');
+      // allow Unicode letters (\p{L}) and numbers (\p{N}), spaces and hyphens
+      slug = slug.replace(/[^\p{L}\p{N}\s-]+/gu, '');
+      slug = slug.replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+      // fallback if slug is empty (e.g., title had only unsupported characters)
+      if (!slug) {
+        slug = 'item-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
+      }
+      this.slug = slug;
+    } catch (e) {
+      // In case the runtime doesn't support Unicode property escapes, fall back
+      // to a basic ASCII-safe slug and a fallback unique id if empty.
+      let slug = String(this.title).toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .trim();
+      if (!slug) slug = 'item-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
+      this.slug = slug;
+    }
   }
   next();
 });

@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
@@ -22,16 +24,48 @@ router.post('/register', async (req, res) => {
   }
 });
 
+// Multer setup for user avatar uploads (register)
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, path.join(__dirname, '..', 'public', 'uploads'));
+  },
+  filename: function (req, file, cb) {
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, unique + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage });
+
 // Reporter self-registration (will be pending approval)
-router.post('/register-reporter', async (req, res) => {
+router.post('/register-reporter', upload.single('avatar'), async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.status(400).json({ success: false, message: 'Missing fields' });
 
     const existing = await User.findOne({ email });
     if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
+    // generate a simple reporterId - try to make collision unlikely
+    const makeReporterId = () => {
+      const suffix = Date.now().toString().slice(-6);
+      const rand = Math.floor(Math.random() * 900 + 100); // 100-999
+      return `MB${suffix}${rand}`;
+    };
 
-    const user = new User({ name, email, password, role: 'reporter', isApproved: false });
+    let reporterId = makeReporterId();
+    // ensure uniqueness (rare) - try a few times
+    for (let i = 0; i < 5; i++) {
+      const found = await User.findOne({ reporterId });
+      if (!found) break;
+      reporterId = makeReporterId();
+    }
+
+    // if avatar uploaded, save path
+    let user;
+    if (req.file && req.file.filename) {
+      user = new User({ name, email, password, role: 'reporter', isApproved: false, reporterId, avatar: `/uploads/${req.file.filename}` });
+    } else {
+      user = new User({ name, email, password, role: 'reporter', isApproved: false, reporterId });
+    }
     await user.save();
     res.json({ success: true, message: 'Registered as reporter. Await superadmin approval.' });
   } catch (err) {

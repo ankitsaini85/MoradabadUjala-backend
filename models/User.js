@@ -8,6 +8,12 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'superadmin', 'reporter'], default: 'admin' },
   // reporter accounts require approval by superadmin before they can login
   isApproved: { type: Boolean, default: false },
+  // Unique reporter identifier (e.g. RJ-123456), generated at registration for reporters
+  reporterId: { type: String, unique: true, sparse: true },
+  // When the reporter was approved by admin/superadmin
+  approvedAt: { type: Date },
+  // Optional avatar path for reporter ID card
+  avatar: { type: String },
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {

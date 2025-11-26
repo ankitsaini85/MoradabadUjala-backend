@@ -30,7 +30,7 @@ app.use(morgan('dev'));
 // Routes
 app.get('/', (req, res) => {
   res.json({
-    message: 'Welcome to AajTak Clone API',
+    message: 'Welcome to Moradabad Ujala News',
     endpoints: {
       news: '/api/news',
       categories: '/api/categories',
