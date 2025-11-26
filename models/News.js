@@ -12,6 +12,13 @@ const newsSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
     },
+    // Short share token for prettier share links (e.g. /r/abc123)
+    shortId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
     description: {
       type: String,
       required: true,
@@ -23,24 +30,7 @@ const newsSchema = new mongoose.Schema(
     category: {
       type: String,
       required: true,
-      enum: [
-        'breaking',
-        'india',
-        'world',
-        'sports',
-        'entertainment',
-        'business',
-        'technology',
-        'health',
-        'education',
-        'lifestyle',
-        'auto',
-        'religion',
-        'ujala',
-        'Moradabad ujala',
-        'ujala gallery',
-        'ujala events'
-      ],
+      default: 'Moradabad ujala'
     },
     imageUrl: {
       type: String,
@@ -121,6 +111,17 @@ const newsSchema = new mongoose.Schema(
 
 // Auto-generate slug from title
 newsSchema.pre('save', function (next) {
+  // Ensure a shortId exists for prettier share links
+  try {
+    if (!this.shortId) {
+      // simple deterministic-ish short id using timestamp + random base36
+      const ts = Date.now().toString(36);
+      const rnd = Math.random().toString(36).slice(2, 8);
+      this.shortId = (ts + rnd).slice(0, 10);
+    }
+  } catch (e) {
+    // ignore shortId generation failures
+  }
   if (this.isModified('title')) {
     try {
       // Preserve Unicode letters (e.g., Hindi) when generating slugs.

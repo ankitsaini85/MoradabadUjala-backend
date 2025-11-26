@@ -136,13 +136,41 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
     await news.save();
     res.json({ success: true, message: 'News uploaded and pending approval', data: news });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('Error in POST /reporter/upload', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Server error',
+      ...(process.env.NODE_ENV !== 'production' ? { stack: err.stack } : {})
+    });
   }
 });
 
 // Reporter upload endpoint (reporters submit news for approval)
 router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }, { name: 'galleryImages', maxCount: 10 }]), async (req, res) => {
   try {
+    // Helpful debug logging for reporter uploads
+    try {
+      const fileSummary = {};
+      if (req.files) {
+        Object.keys(req.files).forEach((k) => {
+          fileSummary[k] = Array.isArray(req.files[k]) ? req.files[k].map(f => f && f.filename) : [];
+        });
+      }
+      console.log('Reporter upload request:', {
+        body: {
+          title: req.body && req.body.title,
+          description: req.body && req.body.description,
+          content: req.body && req.body.content,
+          author: req.body && req.body.author,
+          location: req.body && req.body.location,
+          type: req.body && req.body.type,
+        },
+        user: req.user ? { id: req.user.id, name: req.user.name, roles: req.user.roles } : undefined,
+        files: fileSummary,
+      });
+    } catch (logErr) {
+      console.warn('Failed to log reporter upload request', logErr && logErr.message);
+    }
     const { title, description, content, author, location, type } = req.body;
     if (!title || !description || !content) return res.status(400).json({ success: false, message: 'Missing required fields' });
 
@@ -187,10 +215,28 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
     // Attach reporter id if available
     if (req.user && req.user.id) news.reporterId = req.user.id;
 
-    await news.save();
-    res.json({ success: true, message: 'News submitted and pending approval', data: news });
+    try {
+      await news.save();
+      return res.json({ success: true, message: 'News submitted and pending approval', data: news });
+    } catch (saveErr) {
+      console.error('Error saving reporter-submitted news', saveErr);
+      // Handle duplicate key (e.g., slug) more gracefully
+      if (saveErr && saveErr.code === 11000) {
+        return res.status(409).json({ success: false, message: 'Duplicate key error: an item with similar slug already exists', error: saveErr.message });
+      }
+      return res.status(500).json({
+        success: false,
+        message: saveErr.message || 'Server error while saving news',
+        ...(process.env.NODE_ENV !== 'production' ? { stack: saveErr.stack } : {}),
+      });
+    }
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('Unexpected error in /reporter/upload handler', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Server error',
+      ...(process.env.NODE_ENV !== 'production' ? { stack: err.stack } : {}),
+    });
   }
 });
 
@@ -363,18 +409,19 @@ router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superad
     // Also, if category was already a ujala-like value, normalize to 'Moradabad ujala'.
     try {
       const existingCat = (item.category || '').toString().trim();
-      // preserve gallery/event flags and categories when applicable
+      // For gallery/event keep explicit categories
       if (item.isGallery) {
         item.category = 'ujala gallery';
       } else if (item.isEvent) {
         item.category = 'ujala events';
-      } else if (item.reporterId || /ujala/i.test(existingCat)) {
-        item.category = 'Moradabad ujala';
       } else if (!existingCat) {
+        // Only set default when no category was provided by submitter
         item.category = 'Moradabad ujala';
       }
+      // If an uploader (reporter/admin) provided a category, preserve it as-is.
     } catch (e) {
-      item.category = 'Moradabad ujala';
+      // Keep any existing category if possible, otherwise set sensible default
+      item.category = item.category || 'Moradabad ujala';
     }
     // mark as breaking so it appears at top of ujala listing
     item.isBreaking = true;

@@ -10,12 +10,25 @@ const authRoutes = require('./routes/authRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const userRoutes = require('./routes/userRoutes');
 const path = require('path');
+const News = require('./models/News');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Connect to MongoDB
 connectDB();
+
+// Ensure uploads directory exists to avoid multer errors when saving files
+const fs = require('fs');
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    console.log('Created uploads directory:', uploadsDir);
+  }
+} catch (e) {
+  console.warn('Could not create uploads directory:', uploadsDir, e && e.message);
+}
 
 // Middleware
 app.use(cors({
@@ -58,6 +71,21 @@ app.get('/share/:slug', (req, res) => {
     if (!slug) return res.status(400).send('Bad Request');
     return res.redirect(301, `/api/news/share/${encodeURIComponent(slug)}`);
   } catch (err) {
+    return res.status(500).send('Server error');
+  }
+});
+
+// Short share redirect: /r/:short -> backend share preview (/api/news/share/:slug)
+app.get('/r/:short', async (req, res) => {
+  try {
+    const short = String(req.params.short || '').trim();
+    if (!short) return res.status(400).send('Bad Request');
+    const item = await News.findOne({ shortId: short }).select('slug');
+    if (!item) return res.redirect(302, '/');
+    const origin = (process.env.SERVER_URL && process.env.SERVER_URL.replace(/\/$/, '')) || `${req.protocol}://${req.get('host')}`;
+    return res.redirect(301, `${origin}/api/news/share/${encodeURIComponent(item.slug)}`);
+  } catch (err) {
+    console.error('Error in /r/:short redirect', err);
     return res.status(500).send('Server error');
   }
 });
