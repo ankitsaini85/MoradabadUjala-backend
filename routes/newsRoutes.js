@@ -5,20 +5,71 @@ const News = require('../models/News');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const objectStorage = require('../services/objectStorage');
 const mongoose = require('mongoose');
 const { verifyToken, requireRole } = require('../middleware/auth');
 
-// Multer setup for uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, '..', 'public', 'uploads'));
-  },
-  filename: function (req, file, cb) {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
+// Helper to build absolute URLs for uploaded files using configured SERVER_URL
+function makeAbsoluteUrl(req, p) {
+  if (!p) return '';
+  if (/^https?:\/\//i.test(p)) return p;
+  const origin = (process.env.SERVER_URL && process.env.SERVER_URL.replace(/\/$/, '')) || `${req.protocol}://${req.get('host')}`;
+  const rel = p.startsWith('/') ? p : '/' + p;
+  return origin + rel;
+}
+
+// Normalize media URLs in a news document for API responses.
+function normalizeMedia(doc) {
+  if (!doc) return doc;
+  const out = Object.assign({}, doc && doc.toObject ? doc.toObject() : doc);
+  const makePublic = (p) => {
+    if (!p) return p;
+    if (/^https?:\/\//i.test(p)) {
+      // If already absolute and points to uploads or to the public dev URL, convert to public URL
+      if (objectStorage && objectStorage.enabled && (p.includes('/uploads/') || (process.env.R2_PUBLIC_URL && p.includes(process.env.R2_PUBLIC_URL)))) {
+        const fname = p.split('/').pop();
+        if (fname) return objectStorage.getPublicUrl(`uploads/${fname}`);
+      }
+      return p;
+    }
+    // local path like /uploads/...
+    if (p.startsWith('/uploads/') || p.indexOf('/uploads/') >= 0) {
+      const fname = p.split('/').pop();
+      if (fname && objectStorage && objectStorage.enabled) return objectStorage.getPublicUrl(`uploads/${fname}`);
+      return p;
+    }
+    return p;
+  };
+
+  out.imageUrl = makePublic(out.imageUrl || out.imagePath || '');
+  out.videoUrl = makePublic(out.videoUrl || out.videoPath || '');
+  if (Array.isArray(out.galleryImages)) {
+    out.galleryImages = out.galleryImages.map(g => makePublic(g || ''));
   }
-});
-const upload = multer({ storage });
+  return out;
+}
+
+// Multer setup: prefer memoryStorage when object storage is enabled (upload directly to R2),
+// otherwise fallback to legacy diskStorage under public/uploads.
+let upload;
+if (objectStorage && objectStorage.enabled) {
+  const memoryStorage = multer.memoryStorage();
+  upload = multer({ storage: memoryStorage });
+} else {
+  const diskStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      const dir = path.join(__dirname, '..', 'public', 'uploads');
+      // ensure dir exists
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+      cb(null, dir);
+    },
+    filename: function (req, file, cb) {
+      const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      cb(null, unique + path.extname(file.originalname));
+    }
+  });
+  upload = multer({ storage: diskStorage });
+}
 
 // Get all news with LIVE API fetching
 router.get('/', async (req, res) => {
@@ -95,12 +146,12 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
     const { title, description, content, author, location, type } = req.body;
     if (!title || !description || !content) return res.status(400).json({ success: false, message: 'Missing required fields' });
 
+    // Create the News document first (without binary blobs) so we have an _id
     const news = new News({
       title,
       description,
       content,
       author: author || 'Moradabad Ujala Team',
-      // allow admin to create normal ujala, gallery or event
       category: (type === 'gallery') ? 'ujala gallery' : (type === 'event') ? 'ujala events' : 'ujala',
       isUjala: true,
       isGallery: type === 'gallery',
@@ -109,22 +160,80 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
       location: location || '',
     });
 
-    // handle files if provided
+    await news.save();
+
+    // handle files if provided (diskStorage provides filenames)
     if (req.files) {
       const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : undefined;
-      const videoFile = Array.isArray(req.files.video) ? req.files.video[0] : undefined;
       const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
+
       if (imageFile) {
-        news.imagePath = `/uploads/${imageFile.filename}`;
-        news.imageUrl = news.imagePath;
-      }
-      if (videoFile) {
-        news.videoPath = `/uploads/${videoFile.filename}`;
-        news.videoUrl = news.videoPath;
+        // If multer used memoryStorage (buffer present), upload buffer directly to object storage
+        if (imageFile.buffer && objectStorage && objectStorage.enabled) {
+          try {
+            const ext = path.extname(imageFile.originalname || '') || '';
+            const filename = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+            const key = `uploads/${filename}`;
+            await objectStorage.uploadBuffer(imageFile.buffer, key, imageFile.mimetype);
+            news.imageUrl = objectStorage.getPublicUrl(key);
+            news.imagePath = undefined;
+          } catch (e) {
+            console.warn('Failed to upload admin image buffer to object storage:', e && e.message);
+            if (imageFile.filename) {
+              news.imagePath = `/uploads/${imageFile.filename}`;
+              news.imageUrl = makeAbsoluteUrl(req, news.imagePath);
+            }
+          }
+        } else if (imageFile.filename) {
+          news.imagePath = `/uploads/${imageFile.filename}`;
+          news.imageUrl = makeAbsoluteUrl(req, news.imagePath);
+          if (objectStorage && objectStorage.enabled) {
+            try {
+              const local = path.join(__dirname, '..', 'public', 'uploads', imageFile.filename);
+              const key = `uploads/${imageFile.filename}`;
+              await objectStorage.uploadFileFromPath(local, key);
+              news.imageUrl = objectStorage.getPublicUrl(key);
+              news.imagePath = undefined;
+              try { fs.unlinkSync(local); } catch (e) { /* ignore */ }
+            } catch (e) {
+              console.warn('Failed to upload admin image to object storage:', e && e.message);
+            }
+          }
+        }
       }
       if (gallery && gallery.length > 0) {
-        news.galleryImages = gallery.map(f => `/uploads/${f.filename}`);
+        news.galleryImages = gallery.map(f => (f.filename ? makeAbsoluteUrl(req, `/uploads/${f.filename}`) : (f.path || '')));
+        if (objectStorage && objectStorage.enabled) {
+          const newGallery = [];
+          for (const f of gallery) {
+            try {
+              if (f.buffer) {
+                const ext = path.extname(f.originalname || '') || '';
+                const filename = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+                const key = `uploads/${filename}`;
+                await objectStorage.uploadBuffer(f.buffer, key, f.mimetype);
+                newGallery.push(objectStorage.getPublicUrl(key));
+              } else if (f.filename) {
+                const local = path.join(__dirname, '..', 'public', 'uploads', f.filename);
+                const key = `uploads/${f.filename}`;
+                try {
+                  await objectStorage.uploadFileFromPath(local, key);
+                  newGallery.push(objectStorage.getPublicUrl(key));
+                  try { fs.unlinkSync(local); } catch (e) { }
+                } catch (e) {
+                  console.warn('Failed to upload admin gallery file to object storage:', e && e.message);
+                  newGallery.push(makeAbsoluteUrl(req, `/uploads/${f.filename}`));
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to process gallery file', e && e.message);
+            }
+          }
+          news.galleryImages = newGallery;
+        }
       }
+
+      await news.save();
     }
     // event-specific fields
     if (req.body.eventDate) {
@@ -193,17 +302,105 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
       const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : undefined;
       const videoFile = Array.isArray(req.files.video) ? req.files.video[0] : undefined;
       const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
+
+      // Handle image (memory buffer preferred when objectStorage enabled)
       if (imageFile) {
-        news.imagePath = `/uploads/${imageFile.filename}`;
-        news.imageUrl = news.imagePath;
+        if (imageFile.buffer && objectStorage && objectStorage.enabled) {
+          try {
+            const ext = path.extname(imageFile.originalname || '') || '';
+            const filename = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+            const key = `uploads/${filename}`;
+            await objectStorage.uploadBuffer(imageFile.buffer, key, imageFile.mimetype);
+            news.imageUrl = objectStorage.getPublicUrl(key);
+            news.imagePath = undefined;
+          } catch (e) {
+            console.warn('Failed to upload reporter image buffer to object storage:', e && e.message);
+            if (imageFile.filename) {
+              news.imagePath = `/uploads/${imageFile.filename}`;
+              news.imageUrl = makeAbsoluteUrl(req, news.imagePath);
+            }
+          }
+        } else if (imageFile.filename) {
+          news.imagePath = `/uploads/${imageFile.filename}`;
+          news.imageUrl = makeAbsoluteUrl(req, news.imagePath);
+        }
       }
+
+      // Handle video
       if (videoFile) {
-        news.videoPath = `/uploads/${videoFile.filename}`;
-        news.videoUrl = news.videoPath;
+        if (videoFile.buffer && objectStorage && objectStorage.enabled) {
+          try {
+            const ext = path.extname(videoFile.originalname || '') || '';
+            const filename = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+            const key = `uploads/${filename}`;
+            await objectStorage.uploadBuffer(videoFile.buffer, key, videoFile.mimetype);
+            news.videoUrl = objectStorage.getPublicUrl(key);
+            news.videoPath = undefined;
+          } catch (e) {
+            console.warn('Failed to upload reporter video buffer to object storage:', e && e.message);
+            if (videoFile.filename) {
+              news.videoPath = `/uploads/${videoFile.filename}`;
+              news.videoUrl = makeAbsoluteUrl(req, news.videoPath);
+            }
+          }
+        } else if (videoFile.filename) {
+          news.videoPath = `/uploads/${videoFile.filename}`;
+          news.videoUrl = makeAbsoluteUrl(req, news.videoPath);
+        }
       }
+
+      // Handle gallery
       if (gallery && gallery.length > 0) {
-        news.galleryImages = gallery.map(f => `/uploads/${f.filename}`);
+        news.galleryImages = gallery.map(f => (f.filename ? makeAbsoluteUrl(req, `/uploads/${f.filename}`) : (f.path || '')));
+        if (objectStorage && objectStorage.enabled) {
+          const newGallery = [];
+          for (const f of gallery) {
+            try {
+              if (f.buffer) {
+                const ext = path.extname(f.originalname || '') || '';
+                const filename = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+                const key = `uploads/${filename}`;
+                await objectStorage.uploadBuffer(f.buffer, key, f.mimetype);
+                newGallery.push(objectStorage.getPublicUrl(key));
+              } else if (f.filename) {
+                const local = path.join(__dirname, '..', 'public', 'uploads', f.filename);
+                const key = `uploads/${f.filename}`;
+                try {
+                  await objectStorage.uploadFileFromPath(local, key);
+                  newGallery.push(objectStorage.getPublicUrl(key));
+                  try { fs.unlinkSync(local); } catch (e) { }
+                } catch (e) {
+                  console.warn('Failed to upload gallery file to object storage:', e && e.message);
+                  newGallery.push(makeAbsoluteUrl(req, `/uploads/${f.filename}`));
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to process gallery file', e && e.message);
+            }
+          }
+          news.galleryImages = newGallery;
+        }
       }
+
+      // If objectStorage enabled and some files were left as local (because buffer not present), attempt to upload them
+      if (objectStorage && objectStorage.enabled) {
+        try {
+          if (!news.imageUrl && imageFile && imageFile.filename) {
+            const local = path.join(__dirname, '..', 'public', 'uploads', imageFile.filename);
+            const key = `uploads/${imageFile.filename}`;
+            try { await objectStorage.uploadFileFromPath(local, key); news.imageUrl = objectStorage.getPublicUrl(key); news.imagePath = undefined; try { fs.unlinkSync(local); } catch (e) {} } catch (e) { console.warn('Failed to upload image to object storage:', e && e.message); }
+          }
+          if (!news.videoUrl && videoFile && videoFile.filename) {
+            const local = path.join(__dirname, '..', 'public', 'uploads', videoFile.filename);
+            const key = `uploads/${videoFile.filename}`;
+            try { await objectStorage.uploadFileFromPath(local, key); news.videoUrl = objectStorage.getPublicUrl(key); news.videoPath = undefined; try { fs.unlinkSync(local); } catch (e) {} } catch (e) { console.warn('Failed to upload video to object storage:', e && e.message); }
+          }
+        } catch (e) {
+          console.warn('Error while uploading leftover files to object storage:', e && e.message);
+        }
+      }
+
+      await news.save();
     }
     // event-specific fields
     if (req.body.eventDate) {
@@ -253,24 +450,7 @@ router.get('/ujala', async (req, res) => {
       .sort({ isBreaking: -1, createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit);
-    res.json({ success: true, data: docs, pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Public ujala gallery listing (only approved gallery items)
-router.get('/ujala-gallery', async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const query = { isUjala: true, approved: true, isGallery: true };
-    const total = await News.countDocuments(query);
-    const docs = await News.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
-    res.json({ success: true, data: docs, pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
+    res.json({ success: true, data: docs.map(normalizeMedia), pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -287,7 +467,7 @@ router.get('/ujala-events', async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit);
-    res.json({ success: true, data: docs, pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
+    res.json({ success: true, data: docs.map(normalizeMedia), pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -295,6 +475,136 @@ router.get('/ujala-events', async (req, res) => {
 
 // Public share preview page for social platforms (Open Graph meta tags)
 // Example: GET /api/news/share/:slug
+// Serve image media for a news item (disk-based)
+router.get('/media/:id/image', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).send('Bad Request');
+    const item = await News.findById(id).select('imagePath imageUrl');
+    if (!item) return res.status(404).send('Not found');
+            // prefer external absolute URL — but if it's an R2/public URL and object storage is enabled, don't redirect straight to the stored public URL; instead generate a signed URL for the object
+            if (item.imageUrl && /^https?:\/\//i.test(item.imageUrl)) {
+              if (objectStorage && objectStorage.enabled && (item.imageUrl.includes('/uploads/') || (process.env.R2_PUBLIC_URL && item.imageUrl.includes(process.env.R2_PUBLIC_URL)))) {
+                const fname = (item.imageUrl || '').split('/').pop();
+                if (fname) {
+                  const key = `uploads/${fname}`;
+                  try {
+                    const url = objectStorage.getSignedUrl ? objectStorage.getSignedUrl(key) : objectStorage.getPublicUrl(key);
+                    return res.redirect(302, url);
+                  } catch (e) {
+                    return res.redirect(302, objectStorage.getPublicUrl(key));
+                  }
+                }
+              }
+              return res.redirect(302, item.imageUrl);
+    }
+    // If imageUrl is a local path (e.g. '/uploads/filename') and object storage is enabled, try R2 first
+    if (item.imageUrl && !/^https?:\/\//i.test(item.imageUrl) && objectStorage && objectStorage.enabled) {
+      const fname = (item.imageUrl || '').split('/').pop();
+          if (fname) {
+        const key = `uploads/${fname}`;
+        try {
+          const exists = await objectStorage.objectExists(key);
+          if (exists) {
+            try {
+              const url = objectStorage.getSignedUrl(key);
+              return res.redirect(302, url);
+            } catch (e) {
+              return res.redirect(302, objectStorage.getPublicUrl(key));
+            }
+          }
+        } catch (e) {
+          console.warn('Error checking object existence for', key, e && e.message);
+        }
+      }
+    }
+    if (item.imagePath) {
+      // If object storage enabled, try R2 first and verify object exists
+      if (objectStorage && objectStorage.enabled) {
+        const fname = (item.imagePath || '').split('/').pop();
+        if (fname) {
+          const key = `uploads/${fname}`;
+          try {
+            const exists = await objectStorage.objectExists(key);
+            if (exists) {
+              try {
+                const url = objectStorage.getSignedUrl(key);
+                return res.redirect(302, url);
+              } catch (e) {
+                return res.redirect(302, objectStorage.getPublicUrl(key));
+              }
+            }
+          } catch (e) {
+            console.warn('Error checking object existence for', key, e && e.message);
+          }
+        }
+      }
+      const rel = item.imagePath.startsWith('/') ? item.imagePath.slice(1) : item.imagePath;
+      const fp = path.join(__dirname, '..', 'public', rel);
+      if (fs.existsSync(fp)) return res.sendFile(fp);
+      // missing local file and no R2 object -> return placeholder
+      const fallback = (process.env.DEFAULT_OG_IMAGE || '') || '/placeholder.svg';
+      if (/^https?:\/\//i.test(fallback)) return res.redirect(302, fallback);
+      return res.sendFile(path.join(__dirname, '..', 'public', fallback.startsWith('/') ? fallback.slice(1) : fallback));
+    }
+    return res.status(404).send('No image');
+  } catch (err) {
+    console.error('Error serving /media/:id/image', err);
+    return res.status(500).send('Server error');
+  }
+});
+
+// Serve gallery image by index
+router.get('/media/:id/gallery/:idx', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const idx = parseInt(req.params.idx || '0', 10);
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).send('Bad Request');
+    const item = await News.findById(id).select('galleryImages');
+    if (!item) return res.status(404).send('Not found');
+    if (Array.isArray(item.galleryImages) && item.galleryImages[idx]) {
+      const url = item.galleryImages[idx];
+      if (/^https?:\/\//i.test(url)) {
+        if (objectStorage && objectStorage.enabled && (url.includes('/uploads/') || (process.env.R2_PUBLIC_URL && url.includes(process.env.R2_PUBLIC_URL)))) {
+          const fname = (url || '').split('/').pop();
+          if (fname) {
+            const key = `uploads/${fname}`;
+            try {
+              const redirectUrl = objectStorage.getSignedUrl ? objectStorage.getSignedUrl(key) : objectStorage.getPublicUrl(key);
+              return res.redirect(302, redirectUrl);
+            } catch (e) {
+              return res.redirect(302, objectStorage.getPublicUrl(key));
+            }
+          }
+        }
+        return res.redirect(302, url);
+      }
+      // local path — if object storage enabled, try R2 first (verify existence)
+      if (objectStorage && objectStorage.enabled) {
+        const fname = (url || '').split('/').pop();
+        if (fname) {
+          const key = `uploads/${fname}`;
+          try {
+            const exists = await objectStorage.objectExists(key);
+            if (exists) return res.redirect(302, objectStorage.getPublicUrl(key));
+          } catch (e) {
+            console.warn('Error checking gallery object existence for', key, e && e.message);
+          }
+        }
+      }
+      const rel = url.startsWith('/') ? url.slice(1) : url;
+      const fp = path.join(__dirname, '..', 'public', rel);
+      if (fs.existsSync(fp)) return res.sendFile(fp);
+      const fallback = (process.env.DEFAULT_OG_IMAGE || '') || '/placeholder.svg';
+      if (/^https?:\/\//i.test(fallback)) return res.redirect(302, fallback);
+      return res.sendFile(path.join(__dirname, '..', 'public', fallback.startsWith('/') ? fallback.slice(1) : fallback));
+    }
+    return res.status(404).send('No image');
+  } catch (err) {
+    console.error('Error serving /media/:id/gallery/:idx', err);
+    return res.status(500).send('Server error');
+  }
+});
 router.get('/share/:slug', async (req, res) => {
   try {
     const rawSlug = String(req.params.slug || '');
@@ -370,7 +680,7 @@ router.get('/share/:slug', async (req, res) => {
 router.get('/superadmin/approval', verifyToken, requireRole('superadmin'), async (req, res) => {
   try {
     const pending = await News.find({ isUjala: true, approved: false }).sort({ createdAt: -1 });
-    res.json({ success: true, data: pending });
+    res.json({ success: true, data: pending.map(normalizeMedia) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -380,7 +690,7 @@ router.get('/superadmin/approval', verifyToken, requireRole('superadmin'), async
 router.get('/superadmin/approval/gallery', verifyToken, requireRole('superadmin'), async (req, res) => {
   try {
     const pending = await News.find({ isUjala: true, approved: false, isGallery: true }).sort({ createdAt: -1 });
-    res.json({ success: true, data: pending });
+    res.json({ success: true, data: pending.map(normalizeMedia) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -390,7 +700,7 @@ router.get('/superadmin/approval/gallery', verifyToken, requireRole('superadmin'
 router.get('/superadmin/approval/events', verifyToken, requireRole('superadmin'), async (req, res) => {
   try {
     const pending = await News.find({ isUjala: true, approved: false, isEvent: true }).sort({ createdAt: -1 });
-    res.json({ success: true, data: pending });
+    res.json({ success: true, data: pending.map(normalizeMedia) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -474,7 +784,7 @@ router.put('/superadmin/approval/:id/approve/event', verifyToken, requireRole('s
 router.get('/admin/approved-news', verifyToken, requireRole('superadmin'), async (req, res) => {
   try {
     const items = await News.find({ isUjala: true, approved: true }).sort({ createdAt: -1 });
-    res.json({ success: true, data: items });
+    res.json({ success: true, data: items.map(normalizeMedia) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -484,7 +794,7 @@ router.get('/admin/approved-news', verifyToken, requireRole('superadmin'), async
 router.get('/admin/approved-gallery', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
   try {
     const items = await News.find({ isUjala: true, approved: true, isGallery: true }).sort({ createdAt: -1 });
-    res.json({ success: true, data: items });
+    res.json({ success: true, data: items.map(normalizeMedia) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -494,7 +804,7 @@ router.get('/admin/approved-gallery', verifyToken, requireRole(['admin','superad
 router.get('/admin/approved-events', verifyToken, requireRole(['admin','superadmin']), async (req, res) => {
   try {
     const items = await News.find({ isUjala: true, approved: true, isEvent: true }).sort({ createdAt: -1 });
-    res.json({ success: true, data: items });
+    res.json({ success: true, data: items.map(normalizeMedia) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -711,16 +1021,14 @@ router.put('/:id', verifyToken, requireRole('admin'), upload.fields([{ name: 'im
       const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
       if (imageFile) {
         item.imagePath = `/uploads/${imageFile.filename}`;
-        item.imageUrl = item.imagePath;
+        item.imageUrl = makeAbsoluteUrl(req, item.imagePath);
       }
       if (videoFile) {
         item.videoPath = `/uploads/${videoFile.filename}`;
-        item.videoUrl = item.videoPath;
+        item.videoUrl = makeAbsoluteUrl(req, item.videoPath);
       }
       if (gallery && gallery.length > 0) {
-        // Append new gallery images to existing list (or replace depending on UI expectation)
-        const newPaths = gallery.map(f => `/uploads/${f.filename}`);
-        // Replace current gallery images with new ones (admin edit usually replaces selection)
+        const newPaths = gallery.map(f => makeAbsoluteUrl(req, `/uploads/${f.filename}`));
         item.galleryImages = newPaths;
       }
     }

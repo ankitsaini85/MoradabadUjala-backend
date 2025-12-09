@@ -14,6 +14,14 @@ const userSchema = new mongoose.Schema({
   approvedAt: { type: Date },
   // Optional avatar path for reporter ID card
   avatar: { type: String },
+  // Optional display role/title shown on the press card (e.g. "Reporter Tehsil Bilari")
+  pressRole: { type: String },
+  // Reporter region/locality (shown on press ID card)
+  region: { type: String },
+  // Additional reporter details for back-side of ID card
+  dob: { type: String },
+  bloodGroup: { type: String },
+  address: { type: String },
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {

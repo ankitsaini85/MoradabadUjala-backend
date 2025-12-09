@@ -44,6 +44,7 @@ const newsSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    // Gallery image URLs/paths
     location: {
       type: String,
     },

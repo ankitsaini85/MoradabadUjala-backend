@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+const objectStorage = require('../services/objectStorage');
 const path = require('path');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
@@ -9,7 +10,7 @@ const auth = require('../middleware/auth');
 // Admin registration (restricted: in production you would protect this or seed admin)
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, region } = req.body;
     if (!name || !email || !password) return res.status(400).json({ success: false, message: 'Missing fields' });
 
     // Prevent creating superadmin via register
@@ -25,21 +26,26 @@ router.post('/register', async (req, res) => {
 });
 
 // Multer setup for user avatar uploads (register)
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, '..', 'public', 'uploads'));
-  },
-  filename: function (req, file, cb) {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
-  }
-});
-const upload = multer({ storage });
+let upload;
+if (objectStorage && objectStorage.enabled) {
+  upload = multer({ storage: multer.memoryStorage() });
+} else {
+  const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, path.join(__dirname, '..', 'public', 'uploads'));
+    },
+    filename: function (req, file, cb) {
+      const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      cb(null, unique + path.extname(file.originalname));
+    }
+  });
+  upload = multer({ storage });
+}
 
 // Reporter self-registration (will be pending approval)
 router.post('/register-reporter', upload.single('avatar'), async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, region, pressRole, dob, bloodGroup, address } = req.body;
     if (!name || !email || !password) return res.status(400).json({ success: false, message: 'Missing fields' });
 
     const existing = await User.findOne({ email });
@@ -59,13 +65,43 @@ router.post('/register-reporter', upload.single('avatar'), async (req, res) => {
       reporterId = makeReporterId();
     }
 
-    // if avatar uploaded, save path
-    let user;
-    if (req.file && req.file.filename) {
-      user = new User({ name, email, password, role: 'reporter', isApproved: false, reporterId, avatar: `/uploads/${req.file.filename}` });
-    } else {
-      user = new User({ name, email, password, role: 'reporter', isApproved: false, reporterId });
+    // if avatar uploaded, save path; persist region and pressRole if provided
+    let userData = { name, email, password, role: 'reporter', isApproved: false, reporterId };
+    if (region && typeof region === 'string' && region.trim()) userData.region = region.trim();
+    if (pressRole && typeof pressRole === 'string' && pressRole.trim()) userData.pressRole = pressRole.trim();
+    if (dob && typeof dob === 'string' && dob.trim()) userData.dob = dob.trim();
+    if (bloodGroup && typeof bloodGroup === 'string' && bloodGroup.trim()) userData.bloodGroup = bloodGroup.trim();
+    if (address && typeof address === 'string' && address.trim()) userData.address = address.trim();
+    if (req.file) {
+      // If memory buffer present and objectStorage enabled, upload to R2
+      if (req.file.buffer && objectStorage && objectStorage.enabled) {
+        try {
+          const ext = path.extname(req.file.originalname || '') || '';
+          const filename = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
+          const key = `uploads/${filename}`;
+          await objectStorage.uploadBuffer(req.file.buffer, key, req.file.mimetype);
+          userData.avatar = objectStorage.getPublicUrl(key);
+        } catch (e) {
+          console.warn('Failed to upload avatar buffer to object storage:', e && e.message);
+          if (req.file.filename) userData.avatar = `/uploads/${req.file.filename}`;
+        }
+      } else if (req.file.filename) {
+        userData.avatar = `/uploads/${req.file.filename}`;
+        // If object storage enabled but disk storage was used, attempt to upload the local file
+        if (objectStorage && objectStorage.enabled) {
+          try {
+            const local = path.join(__dirname, '..', 'public', 'uploads', req.file.filename);
+            const key = `uploads/${req.file.filename}`;
+            await objectStorage.uploadFileFromPath(local, key);
+            userData.avatar = objectStorage.getPublicUrl(key);
+            try { require('fs').unlinkSync(local); } catch (e) { }
+          } catch (e) {
+            console.warn('Failed to upload avatar file to object storage:', e && e.message);
+          }
+        }
+      }
     }
+    const user = new User(userData);
     await user.save();
     res.json({ success: true, message: 'Registered as reporter. Await superadmin approval.' });
   } catch (err) {
@@ -111,8 +147,6 @@ router.post('/superadmin-login', async (req, res) => {
   }
 });
 
-module.exports = router;
-
 // Debug: return decoded token payload for the current Authorization header
 router.get('/me', auth.verifyToken, (req, res) => {
   try {
@@ -122,4 +156,6 @@ router.get('/me', auth.verifyToken, (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+module.exports = router;
 
