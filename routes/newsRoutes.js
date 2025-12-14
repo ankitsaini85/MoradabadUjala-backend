@@ -473,6 +473,23 @@ router.get('/ujala-events', async (req, res) => {
   }
 });
 
+// Public ujala gallery listing (only approved gallery items)
+router.get('/ujala-gallery', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const query = { isUjala: true, approved: true, isGallery: true };
+    const total = await News.countDocuments(query);
+    const docs = await News.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+    res.json({ success: true, data: docs.map(normalizeMedia), pagination: { total, page, pages: Math.ceil(total / limit), limit }, source: 'database' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Public share preview page for social platforms (Open Graph meta tags)
 // Example: GET /api/news/share/:slug
 // Serve image media for a news item (disk-based)
