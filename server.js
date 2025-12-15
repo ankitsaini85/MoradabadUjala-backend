@@ -78,7 +78,7 @@ app.get('/api/images/proxy', async (req, res) => {
     }
 
     // Fetch the image server-side and stream it to the client with CORS headers
-    const resp = await axios.get(target, { responseType: 'stream', timeout: 15000 });
+    const resp = await axios.get(target, { responseType: 'stream', timeout: 30000 });
     // Pass through content-type and cache headers when present
     if (resp.headers['content-type']) res.setHeader('Content-Type', resp.headers['content-type']);
     if (resp.headers['cache-control']) res.setHeader('Cache-Control', resp.headers['cache-control']);

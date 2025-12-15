@@ -54,7 +54,10 @@ function normalizeMedia(doc) {
 let upload;
 if (objectStorage && objectStorage.enabled) {
   const memoryStorage = multer.memoryStorage();
-  upload = multer({ storage: memoryStorage });
+  upload = multer({ 
+    storage: memoryStorage,
+    limits: { fileSize: 100 * 1024 * 1024 } // 100 MB limit to avoid oversized requests
+  });
 } else {
   const diskStorage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -68,7 +71,10 @@ if (objectStorage && objectStorage.enabled) {
       cb(null, unique + path.extname(file.originalname));
     }
   });
-  upload = multer({ storage: diskStorage });
+  upload = multer({ 
+    storage: diskStorage,
+    limits: { fileSize: 100 * 1024 * 1024 } // 100 MB limit to avoid oversized requests
+  });
 }
 
 // Get all news with LIVE API fetching
@@ -262,7 +268,8 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
       const fileSummary = {};
       if (req.files) {
         Object.keys(req.files).forEach((k) => {
-          fileSummary[k] = Array.isArray(req.files[k]) ? req.files[k].map(f => f && f.filename) : [];
+          const arr = Array.isArray(req.files[k]) ? req.files[k] : [];
+          fileSummary[k] = arr.map(f => f ? { originalname: f.originalname, size: f.size, mimetype: f.mimetype } : 'UNDEFINED');
         });
       }
       console.log('Reporter upload request:', {
@@ -298,11 +305,36 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
       location: location || '',
     });
 
-    if (req.files) {
-      const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : undefined;
-      const videoFile = Array.isArray(req.files.video) ? req.files.video[0] : undefined;
-      const gallery = Array.isArray(req.files.galleryImages) ? req.files.galleryImages : undefined;
+    // Validate files to avoid undefined entries
+    let imageFile = null;
+    let videoFile = null;
+    let gallery = [];
 
+    if (req.files && req.files.image && Array.isArray(req.files.image)) {
+      const f = req.files.image[0];
+      if (f && (f.buffer || f.path || f.filename)) {
+        imageFile = f;
+      } else {
+        console.warn('Invalid image file received:', f);
+      }
+    }
+
+    if (req.files && req.files.video && Array.isArray(req.files.video)) {
+      const f = req.files.video[0];
+      if (f && (f.buffer || f.path || f.filename)) {
+        videoFile = f;
+      } else {
+        console.warn('Invalid video file received:', f);
+      }
+    }
+
+    if (req.files && req.files.galleryImages && Array.isArray(req.files.galleryImages)) {
+      gallery = req.files.galleryImages.filter(f => f && (f.buffer || f.path || f.filename));
+    }
+
+    console.log('Validated files - image:', !!imageFile, 'video:', !!videoFile, 'gallery count:', gallery.length);
+
+    if (imageFile || videoFile || (gallery && gallery.length)) {
       // Handle image (memory buffer preferred when objectStorage enabled)
       if (imageFile) {
         if (imageFile.buffer && objectStorage && objectStorage.enabled) {
@@ -399,9 +431,8 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
           console.warn('Error while uploading leftover files to object storage:', e && e.message);
         }
       }
-
-      await news.save();
     }
+
     // event-specific fields
     if (req.body.eventDate) {
       const d = new Date(req.body.eventDate);
@@ -414,6 +445,7 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
 
     try {
       await news.save();
+      console.log('Reporter news saved successfully:', news._id);
       return res.json({ success: true, message: 'News submitted and pending approval', data: news });
     } catch (saveErr) {
       console.error('Error saving reporter-submitted news', saveErr);
