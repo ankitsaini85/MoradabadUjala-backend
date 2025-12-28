@@ -134,7 +134,7 @@ router.delete('/reporters/:id', auth.verifyToken, auth.requireRole('superadmin')
     if (!user) return res.status(404).json({ success: false, message: 'Reporter not found' });
     if (user.role !== 'reporter') return res.status(400).json({ success: false, message: 'Not a reporter account' });
 
-    await user.remove();
+    await User.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'Reporter deleted' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
