@@ -141,6 +141,105 @@ router.delete('/reporters/:id', auth.verifyToken, auth.requireRole('superadmin')
   }
 });
 
+// Submit consent form (reporter fills and submits)
+router.post('/consent-form', auth.verifyToken, auth.requireRole(['reporter','admin']), async (req, res) => {
+  try {
+    const { fatherName, dateOfBirth, gender, maritalStatus, bloodGroup, mobileNumber, alternateMobile, email, address, reporterRole, qualification, profession, appointmentDate, pressCardDate, photo, signature } = req.body;
+    
+    if (!fatherName || !mobileNumber || !email) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    // Initialize consent data
+    const consentData = {
+      fatherName,
+      dateOfBirth,
+      gender,
+      maritalStatus,
+      bloodGroup,
+      mobileNumber,
+      alternateMobile,
+      email,
+      address,
+      reporterRole,
+      qualification,
+      profession,
+      appointmentDate,
+      pressCardDate,
+      consentSubmittedAt: new Date(),
+    };
+
+    // Upload photo to R2 if provided
+    if (photo && photo.startsWith('data:image')) {
+      try {
+        const base64Data = photo.split(',')[1];
+        if (base64Data) {
+          const buffer = Buffer.from(base64Data, 'base64');
+          const photoKey = `consent-forms/photo-${user._id}-${Date.now()}.jpg`;
+          const uploadResult = await objectStorage.uploadBuffer(buffer, photoKey, 'image/jpeg');
+          consentData.photoFile = objectStorage.getPublicUrl(photoKey);
+          consentData.photo = objectStorage.getPublicUrl(photoKey); // Store URL instead of base64
+        }
+      } catch (photoErr) {
+        console.error('Photo upload error:', photoErr.message);
+        // Continue without photo if upload fails
+      }
+    }
+
+    // Upload signature to R2 if provided
+    if (signature && signature.startsWith('data:image')) {
+      try {
+        const base64Data = signature.split(',')[1];
+        if (base64Data) {
+          const buffer = Buffer.from(base64Data, 'base64');
+          const signatureKey = `consent-forms/signature-${user._id}-${Date.now()}.jpg`;
+          const uploadResult = await objectStorage.uploadBuffer(buffer, signatureKey, 'image/jpeg');
+          consentData.signatureFile = objectStorage.getPublicUrl(signatureKey);
+          consentData.signature = objectStorage.getPublicUrl(signatureKey); // Store URL instead of base64
+        }
+      } catch (sigErr) {
+        console.error('Signature upload error:', sigErr.message);
+        // Continue without signature if upload fails
+      }
+    }
+
+    // Update user consent data
+    user.consentData = consentData;
+    user.isConsent = true;
+
+    await user.save();
+    res.json({ success: true, message: 'Consent form submitted successfully', data: user });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Get consent forms (superadmin only)
+router.get('/consent-forms', auth.verifyToken, auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    
+    const total = await User.countDocuments({ isConsent: true, role: 'reporter' });
+    const forms = await User.find({ isConsent: true, role: 'reporter' })
+      .select('name email reporterId consentData isApproved')
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .sort({ 'consentData.consentSubmittedAt': -1 });
+
+    res.json({ 
+      success: true, 
+      data: forms, 
+      pagination: { total, page, pages: Math.ceil(total / limit), limit } 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;
 
 // Public: reviewer card data (used to render press ID previews)

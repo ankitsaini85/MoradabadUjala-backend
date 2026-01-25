@@ -22,6 +22,29 @@ const userSchema = new mongoose.Schema({
   dob: { type: String },
   bloodGroup: { type: String },
   address: { type: String },
+  // Consent form fields
+  isConsent: { type: Boolean, default: false },
+  consentData: {
+    fatherName: { type: String },
+    dateOfBirth: { type: String },
+    gender: { type: String },
+    maritalStatus: { type: String },
+    bloodGroup: { type: String },
+    mobileNumber: { type: String },
+    alternateMobile: { type: String },
+    email: { type: String },
+    address: { type: String },
+    reporterRole: { type: String },
+    qualification: { type: String },
+    profession: { type: String },
+    appointmentDate: { type: String },
+    pressCardDate: { type: String },
+    photo: { type: String }, // base64 or image URL for reporter photo
+    photoFile: { type: String }, // cloud URL for reporter photo
+    signature: { type: String }, // base64 or image URL
+    signatureFile: { type: String }, // cloud URL for signature
+    consentSubmittedAt: { type: Date },
+  },
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {
