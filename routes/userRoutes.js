@@ -3,6 +3,9 @@ const router = express.Router();
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 const objectStorage = require('../services/objectStorage');
+const multer = require('multer');
+const path = require('path');
+const mongoose = require('mongoose');
 
 // List reporter accounts (superadmin only)
 router.get('/reporters', auth.verifyToken, auth.requireRole('superadmin'), async (req, res) => {
@@ -235,6 +238,163 @@ router.get('/consent-forms', auth.verifyToken, auth.requireRole('superadmin'), a
       data: forms, 
       pagination: { total, page, pages: Math.ceil(total / limit), limit } 
     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Multer setup for document uploads
+let documentUpload;
+if (objectStorage && objectStorage.enabled) {
+  // Use memory storage for direct R2 upload
+  documentUpload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+  });
+} else {
+  // Use disk storage as fallback
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uploadsDir = path.join(__dirname, '..', 'public', 'uploads', 'documents');
+      const fs = require('fs');
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+      cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, uniqueSuffix + '-' + file.originalname);
+    }
+  });
+  documentUpload = multer({ 
+    storage,
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+  });
+}
+
+// Upload document for a reporter (superadmin only)
+router.post('/reporters/:id/documents', auth.verifyToken, auth.requireRole('superadmin'), documentUpload.single('document'), async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const user = await User.findById(userId);
+    
+    if (!user) return res.status(404).json({ success: false, message: 'Reporter not found' });
+    if (user.role !== 'reporter') return res.status(400).json({ success: false, message: 'Not a reporter account' });
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+    let documentUrl = '';
+    let storageKey = '';
+
+    if (objectStorage && objectStorage.enabled && req.file.buffer) {
+      // Upload to R2
+      const ext = path.extname(req.file.originalname);
+      storageKey = `reporter-documents/${userId}/${Date.now()}${ext}`;
+      await objectStorage.uploadBuffer(req.file.buffer, storageKey, req.file.mimetype);
+      documentUrl = objectStorage.getPublicUrl(storageKey);
+    } else if (req.file.path) {
+      // Local storage
+      storageKey = req.file.filename;
+      documentUrl = `/uploads/documents/${req.file.filename}`;
+    }
+
+    // Add document to user's documents array
+    if (!user.documents) user.documents = [];
+    const uploadedBy = mongoose.Types.ObjectId.isValid(req.user.id) ? req.user.id : undefined;
+    user.documents.push({
+      name: req.file.originalname,
+      url: documentUrl,
+      key: storageKey,
+      uploadedAt: new Date(),
+      uploadedBy,
+    });
+
+    await user.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Document uploaded successfully',
+      data: user.documents[user.documents.length - 1]
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Handle multer upload errors for documents
+router.use('/reporters/:id/documents', (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  return next(err);
+});
+
+// Get documents for a reporter (superadmin only)
+router.get('/reporters/:id/documents', auth.verifyToken, auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const user = await User.findById(userId).select('name email reporterId role documents');
+    
+    if (!user) return res.status(404).json({ success: false, message: 'Reporter not found' });
+    if (user.role !== 'reporter') return res.status(400).json({ success: false, message: 'Not a reporter account' });
+
+    // Generate signed URLs for documents if using cloud storage
+    const documents = (user.documents || []).map(doc => {
+      let url = doc.url;
+      if (objectStorage && objectStorage.enabled && doc.key) {
+        try {
+          url = objectStorage.getSignedUrl(doc.key, 3600); // 1 hour expiry
+        } catch (e) {
+          console.error('Error generating signed URL:', e);
+        }
+      }
+      return {
+        _id: doc._id,
+        name: doc.name,
+        url: url,
+        uploadedAt: doc.uploadedAt,
+      };
+    });
+
+    res.json({ 
+      success: true, 
+      data: {
+        reporter: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          reporterId: user.reporterId,
+        },
+        documents: documents
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Delete a document (superadmin only)
+router.delete('/reporters/:id/documents/:docId', auth.verifyToken, auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const { id: userId, docId } = req.params;
+    const user = await User.findById(userId);
+    
+    if (!user) return res.status(404).json({ success: false, message: 'Reporter not found' });
+    if (user.role !== 'reporter') return res.status(400).json({ success: false, message: 'Not a reporter account' });
+
+    // Find and remove the document
+    const docIndex = user.documents.findIndex(d => d._id.toString() === docId);
+    if (docIndex === -1) return res.status(404).json({ success: false, message: 'Document not found' });
+
+    const document = user.documents[docIndex];
+    
+    // TODO: Delete from cloud storage if needed
+    // if (objectStorage && objectStorage.enabled && document.key) {
+    //   await objectStorage.deleteFile(document.key);
+    // }
+
+    user.documents.splice(docIndex, 1);
+    await user.save();
+
+    res.json({ success: true, message: 'Document deleted successfully' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

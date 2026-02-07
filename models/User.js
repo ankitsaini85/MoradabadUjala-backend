@@ -45,6 +45,14 @@ const userSchema = new mongoose.Schema({
     signatureFile: { type: String }, // cloud URL for signature
     consentSubmittedAt: { type: Date },
   },
+  // Documents uploaded by superadmin for this reporter
+  documents: [{
+    name: { type: String, required: true },
+    url: { type: String, required: true },
+    key: { type: String, required: true }, // Storage key for deletion
+    uploadedAt: { type: Date, default: Date.now },
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  }],
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {
