@@ -101,6 +101,9 @@ router.get('/me', auth.verifyToken, async (req, res) => {
     out.dob = user.dob || '';
     out.bloodGroup = user.bloodGroup || '';
     out.address = user.address || '';
+    // include consent form status
+    out.isConsent = user.isConsent || false;
+    out.consentData = user.consentData || null;
 
     res.json({ success: true, data: out });
   } catch (err) {
@@ -147,9 +150,9 @@ router.delete('/reporters/:id', auth.verifyToken, auth.requireRole('superadmin')
 // Submit consent form (reporter fills and submits)
 router.post('/consent-form', auth.verifyToken, auth.requireRole(['reporter','admin']), async (req, res) => {
   try {
-    const { fatherName, dateOfBirth, gender, maritalStatus, bloodGroup, mobileNumber, alternateMobile, email, address, reporterRole, qualification, profession, appointmentDate, pressCardDate, photo, signature } = req.body;
+    const { name, fatherName, dateOfBirth, gender, maritalStatus, bloodGroup, mobileNumber, alternateMobile, email, address, reporterRole, qualification, profession, appointmentDate, pressCardDate, photo, signature } = req.body;
     
-    if (!fatherName || !mobileNumber || !email) {
+    if (!name || !fatherName || !mobileNumber || !email) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
@@ -158,6 +161,7 @@ router.post('/consent-form', auth.verifyToken, auth.requireRole(['reporter','adm
 
     // Initialize consent data
     const consentData = {
+      name,
       fatherName,
       dateOfBirth,
       gender,

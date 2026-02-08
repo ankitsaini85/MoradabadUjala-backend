@@ -25,6 +25,7 @@ const userSchema = new mongoose.Schema({
   // Consent form fields
   isConsent: { type: Boolean, default: false },
   consentData: {
+    name: { type: String },
     fatherName: { type: String },
     dateOfBirth: { type: String },
     gender: { type: String },
