@@ -9,6 +9,7 @@ const categoryRoutes = require('./routes/categoryRoutes');
 const authRoutes = require('./routes/authRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const userRoutes = require('./routes/userRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const path = require('path');
 const News = require('./models/News');
 const objectStorage = require('./services/objectStorage');
@@ -60,6 +61,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Image proxy to avoid browser CORS issues when fetching images from R2/public dev URLs
 // Usage: GET /api/images/proxy?key=uploads/filename.jpg  OR  /api/images/proxy?url=https://...

@@ -8,6 +8,7 @@ const fs = require('fs');
 const objectStorage = require('../services/objectStorage');
 const mongoose = require('mongoose');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendNotificationToAll, buildNotification } = require('../services/pushNotificationService');
 
 // Helper to build absolute URLs for uploaded files using configured SERVER_URL
 function makeAbsoluteUrl(req, p) {
@@ -785,6 +786,22 @@ router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superad
     // mark as breaking so it appears at top of ujala listing
     item.isBreaking = true;
     await item.save();
+    
+    // Send push notification to all subscribers
+    try {
+      const newsUrl = `/news/${item.slug || item._id}`;
+      const notification = buildNotification(
+        item.title,
+        item.description || item.content?.substring(0, 100) || 'नई खबर प्रकाशित हुई',
+        newsUrl,
+        item.image
+      );
+      await sendNotificationToAll(notification);
+    } catch (notifErr) {
+      console.error('Failed to send notification:', notifErr.message);
+      // Don't fail the approval if notification fails
+    }
+    
     res.json({ success: true, message: 'News approved', data: item });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -804,6 +821,21 @@ router.put('/superadmin/approval/:id/approve/gallery', verifyToken, requireRole(
     item.category = 'ujala gallery';
     item.isBreaking = true;
     await item.save();
+    
+    // Send push notification to all subscribers
+    try {
+      const newsUrl = `/news/${item.slug || item._id}`;
+      const notification = buildNotification(
+        item.title,
+        'गैलरी: ' + (item.description || item.content?.substring(0, 80) || 'नई तस्वीरें'),
+        newsUrl,
+        item.image
+      );
+      await sendNotificationToAll(notification);
+    } catch (notifErr) {
+      console.error('Failed to send notification:', notifErr.message);
+    }
+    
     res.json({ success: true, message: 'Gallery approved', data: item });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -823,6 +855,21 @@ router.put('/superadmin/approval/:id/approve/event', verifyToken, requireRole('s
     item.category = 'ujala events';
     item.isBreaking = true;
     await item.save();
+    
+    // Send push notification to all subscribers
+    try {
+      const newsUrl = `/news/${item.slug || item._id}`;
+      const notification = buildNotification(
+        item.title,
+        'आयोजन: ' + (item.description || item.content?.substring(0, 80) || 'नया आयोजन'),
+        newsUrl,
+        item.image
+      );
+      await sendNotificationToAll(notification);
+    } catch (notifErr) {
+      console.error('Failed to send notification:', notifErr.message);
+    }
+    
     res.json({ success: true, message: 'Event approved', data: item });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
