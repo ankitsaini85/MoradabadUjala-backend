@@ -65,6 +65,7 @@ const buildNotification = (newsTitle, newsBody, newsUrl, newsImage = null) => {
     title: '📰 ' + newsTitle,
     body: newsBody,
     icon: newsImage || '/images/ujala_logo_updated-removebg-preview.png',
+    image: newsImage, // Large banner image (360x240 or larger)
     badge: '/images/ujala_logo_updated-removebg-preview.png',
     tag: 'news-notification',
     requireInteraction: false,
