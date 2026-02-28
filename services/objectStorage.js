@@ -47,7 +47,13 @@ async function uploadFileFromPath(localPath, key) {
   if (!enabled) throw new Error('Object storage not enabled');
   if (!fs.existsSync(localPath)) throw new Error('Local file not found: ' + localPath);
   const Body = fs.createReadStream(localPath);
-  const params = { Bucket: getBucket(), Key: key, Body };
+  const params = { 
+    Bucket: getBucket(), 
+    Key: key, 
+    Body,
+    CacheControl: 'public, max-age=31536000, immutable', // Cache for 1 year
+    ContentDisposition: 'inline'
+  };
   // Cloudflare R2 ignores ACL, but we leave it unless S3_NO_PUBLIC_ACL set
   if (!process.env.R2_NO_PUBLIC_ACL) params.ACL = 'public-read';
   return new Promise((resolve, reject) => {
@@ -60,7 +66,13 @@ async function uploadFileFromPath(localPath, key) {
 
 async function uploadBuffer(buffer, key, contentType) {
   if (!enabled) throw new Error('Object storage not enabled');
-  const params = { Bucket: getBucket(), Key: key, Body: buffer };
+  const params = { 
+    Bucket: getBucket(), 
+    Key: key, 
+    Body: buffer,
+    CacheControl: 'public, max-age=31536000, immutable', // Cache for 1 year
+    ContentDisposition: 'inline'
+  };
   if (contentType) params.ContentType = contentType;
   if (!process.env.R2_NO_PUBLIC_ACL) params.ACL = 'public-read';
   return new Promise((resolve, reject) => {

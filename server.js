@@ -141,16 +141,20 @@ if (objectStorage && objectStorage.enabled) {
       if (!filename) return res.status(400).send('Bad Request');
       // map to R2 key and return a presigned URL so objects can be private
       const key = `uploads/${filename}`;
+      
+      // Set cache headers before redirect
+      res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      
       try {
         // If a public dev URL is configured, prefer it (public access).
         if (process.env.R2_PUBLIC_URL) {
-          return res.redirect(302, objectStorage.getPublicUrl(key));
+          return res.redirect(301, objectStorage.getPublicUrl(key)); // Use 301 for permanent redirect
         }
-        const url = objectStorage.getSignedUrl(key);
+        const url = objectStorage.getSignedUrl(key, 3600); // 1 hour expiry
         return res.redirect(302, url);
       } catch (e) {
         // fallback to public URL if signing fails
-        return res.redirect(302, objectStorage.getPublicUrl(key));
+        return res.redirect(301, objectStorage.getPublicUrl(key));
       }
     } catch (e) {
       console.warn('Error redirecting upload to object storage:', e && e.message);
@@ -221,4 +225,15 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`API documentation: http://localhost:${PORT}`);
+  
+  // Self-ping to prevent server from sleeping on free hosting services
+  const selfPingUrl = process.env.SERVER_URL || `http://localhost:${PORT}`;
+  if (process.env.ENABLE_SELF_PING === 'true') {
+    setInterval(() => {
+      fetch(selfPingUrl)
+        .then(() => console.log("Self ping success"))
+        .catch(() => console.log("Ping failed"));
+    }, 30000); // every 30 seconds
+    console.log(`Self-ping enabled for ${selfPingUrl}`);
+  }
 });
