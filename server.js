@@ -263,7 +263,14 @@ app.get('/sitemap.xml', async (req, res) => {
     
     sitemap += '</urlset>';
     
-    res.header('Content-Type', 'application/xml');
+    // Set proper headers for sitemap
+    res.set({
+      'Content-Type': 'application/xml; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+      'Access-Control-Allow-Origin': '*', // Allow all origins for sitemap
+      'X-Robots-Tag': 'noindex' // Don't index the sitemap itself
+    });
+    
     res.send(sitemap);
   } catch (error) {
     console.error('Error generating sitemap:', error);
