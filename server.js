@@ -225,15 +225,15 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`API documentation: http://localhost:${PORT}`);
+});
   
   // Self-ping to prevent server from sleeping on free hosting services
-  const selfPingUrl = process.env.SERVER_URL || `http://localhost:${PORT}`;
-  if (process.env.ENABLE_SELF_PING === 'true') {
-    setInterval(() => {
-      fetch(selfPingUrl)
-        .then(() => console.log("Self ping success"))
-        .catch(() => console.log("Ping failed"));
-    }, 30000); // every 30 seconds
-    console.log(`Self-ping enabled for ${selfPingUrl}`);
-  }
-});
+  // const selfPingUrl = process.env.SERVER_URL || `http://localhost:${PORT}`;
+  // if (process.env.ENABLE_SELF_PING === 'true') {
+  //   setInterval(() => {
+  //     fetch(selfPingUrl)
+  //       .then(() => console.log("Self ping success"))
+  //       .catch(() => console.log("Ping failed"));
+  //   }, 30000); // every 30 seconds
+  //   console.log(`Self-ping enabled for ${selfPingUrl}`);
+  // }
