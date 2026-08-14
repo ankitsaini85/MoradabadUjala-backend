@@ -85,6 +85,36 @@ router.get('/', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const category = req.query.category;
     const search = req.query.search;
+    const normalizedCategory = String(category || '').trim().toLowerCase();
+
+    // Serve RR PUBLIC NEWS from DB instead of the live API route.
+    if (normalizedCategory === 'rr-public-news' || normalizedCategory === 'rr public news') {
+      const query = {
+        approved: true,
+        $or: [
+          { isPublicSubmission: true },
+          { category: 'RR PUBLIC NEWS' },
+        ],
+      };
+      const total = await News.countDocuments(query);
+      const docs = await News.find(query)
+        .sort({ isBreaking: -1, createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit);
+
+      return res.json({
+        success: true,
+        data: docs.map(normalizeMedia),
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit),
+          limit,
+        },
+        source: 'database',
+        message: 'RR PUBLIC NEWS from database',
+      });
+    }
 
     let news = [];
 
@@ -132,6 +162,12 @@ router.get('/', async (req, res) => {
 // Get breaking news (LIVE)
 router.get('/breaking', async (req, res) => {
   try {
+    // If no API key is configured, return an empty array instead of failing.
+    if (!newsAPIService.apiKey) {
+      console.warn('No NEWS_API_KEY configured; /api/news/breaking returning empty list');
+      return res.json({ success: true, data: [], source: 'live-api', message: 'No API key configured; returning empty breaking list' });
+    }
+
     const news = await newsAPIService.fetchBreakingNews(10);
 
     res.json({
@@ -141,7 +177,14 @@ router.get('/breaking', async (req, res) => {
       message: 'Live breaking news from GNews'
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('Error in GET /api/news/breaking', error && error.message ? error.message : error);
+    // Degrade gracefully: breaking news should not hard-fail the homepage.
+    return res.json({
+      success: true,
+      data: [],
+      source: 'live-api',
+      message: 'Breaking news temporarily unavailable',
+    });
   }
 });
 
@@ -158,8 +201,8 @@ router.post('/admin/upload', verifyToken, requireRole('admin'), upload.fields([{
       title,
       description,
       content,
-      author: author || 'Moradabad Ujala Team',
-      category: (type === 'gallery') ? 'ujala gallery' : (type === 'event') ? 'ujala events' : 'ujala',
+      author: author || 'RR NEWS TV Team',
+      category: (type === 'gallery') ? 'RR NEWS TV GALLERY' : (type === 'event') ? 'RR NEWS TV EVENT' : 'RR NEWS TV FASTEST UPDATE',
       isUjala: true,
       isGallery: type === 'gallery',
       isEvent: type === 'event',
@@ -297,8 +340,8 @@ router.post('/reporter/upload', verifyToken, requireRole(['reporter','admin']), 
       content,
       // prefer provided author, else use name from token if available
       author: author || (req.user && req.user.name) || 'Reporter',
-      // reporters can submit normal ujala, gallery, or event; use Moradabad ujala naming
-      category: (type === 'gallery') ? 'ujala gallery' : (type === 'event') ? 'ujala events' : 'Moradabad ujala',
+      // reporters can submit RR news, gallery, or event
+      category: (type === 'gallery') ? 'RR NEWS TV GALLERY' : (type === 'event') ? 'RR NEWS TV EVENT' : 'RR NEWS TV FASTEST UPDATE',
       isUjala: true,
       isGallery: type === 'gallery',
       isEvent: type === 'event',
@@ -765,23 +808,22 @@ router.put('/superadmin/approval/:id/approve', verifyToken, requireRole('superad
     // mark as approved and ensure it is categorized correctly for ujala
     item.approved = true;
     item.isUjala = true;
-    // If this news was created by a reporter, keep/set the category to 'Moradabad ujala'
-    // Also, if category was already a ujala-like value, normalize to 'Moradabad ujala'.
+    // Normalize category labels for RR branding.
     try {
       const existingCat = (item.category || '').toString().trim();
       // For gallery/event keep explicit categories
       if (item.isGallery) {
-        item.category = 'ujala gallery';
+        item.category = 'RR NEWS TV GALLERY';
       } else if (item.isEvent) {
-        item.category = 'ujala events';
+        item.category = 'RR NEWS TV EVENT';
       } else if (!existingCat) {
         // Only set default when no category was provided by submitter
-        item.category = 'Moradabad ujala';
+        item.category = 'RR NEWS TV FASTEST UPDATE';
       }
       // If an uploader (reporter/admin) provided a category, preserve it as-is.
     } catch (e) {
       // Keep any existing category if possible, otherwise set sensible default
-      item.category = item.category || 'Moradabad ujala';
+      item.category = item.category || 'RR NEWS TV FASTEST UPDATE';
     }
     // mark as breaking so it appears at top of ujala listing
     item.isBreaking = true;
@@ -818,7 +860,7 @@ router.put('/superadmin/approval/:id/approve/gallery', verifyToken, requireRole(
     item.isUjala = true;
     item.isGallery = true;
     item.isEvent = false;
-    item.category = 'ujala gallery';
+    item.category = 'RR NEWS TV GALLERY';
     item.isBreaking = true;
     await item.save();
     
@@ -852,7 +894,7 @@ router.put('/superadmin/approval/:id/approve/event', verifyToken, requireRole('s
     item.isUjala = true;
     item.isEvent = true;
     item.isGallery = false;
-    item.category = 'ujala events';
+    item.category = 'RR NEWS TV EVENT';
     item.isBreaking = true;
     await item.save();
     
@@ -1085,7 +1127,7 @@ router.delete('/admin/approved-news/:id', verifyToken, requireRole('superadmin')
 router.get('/featured-db', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 6;
-    const items = await News.find({ isUjala: true, approved: true, isFeatured: true })
+    const items = await News.find({ approved: true, isFeatured: true, $or: [{ isUjala: true }, { isPublicSubmission: true }] })
       // sort by when it was marked featured (newest first), fallback to createdAt
       .sort({ featuredAt: -1, createdAt: -1 })
       .limit(limit);
@@ -1097,7 +1139,7 @@ router.get('/featured-db', async (req, res) => {
 
 // Update a news item (admin or superadmin) - supports replacing image
 // Allow admins to update news and replace image/video/gallery files
-router.put('/:id', verifyToken, requireRole('admin'), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }, { name: 'galleryImages', maxCount: 10 }]), async (req, res) => {
+router.put('/:id', verifyToken, requireRole(['admin', 'superadmin']), upload.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }, { name: 'galleryImages', maxCount: 10 }]), async (req, res) => {
   try {
     const id = req.params.id;
     const item = await News.findById(id);

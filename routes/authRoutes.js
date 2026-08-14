@@ -6,6 +6,7 @@ const objectStorage = require('../services/objectStorage');
 const path = require('path');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
+const { generateReporterId } = require('../utils/reporterId');
 
 // Admin registration (restricted: in production you would protect this or seed admin)
 router.post('/register', async (req, res) => {
@@ -50,19 +51,12 @@ router.post('/register-reporter', upload.single('avatar'), async (req, res) => {
 
     const existing = await User.findOne({ email });
     if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
-    // generate a simple reporterId - try to make collision unlikely
-    const makeReporterId = () => {
-      const suffix = Date.now().toString().slice(-6);
-      const rand = Math.floor(Math.random() * 900 + 100); // 100-999
-      return `MB${suffix}${rand}`;
-    };
-
-    let reporterId = makeReporterId();
-    // ensure uniqueness (rare) - try a few times
+    let reporterId = await generateReporterId();
+    // Handle rare write-race collisions by retrying a few times.
     for (let i = 0; i < 5; i++) {
-      const found = await User.findOne({ reporterId });
+      const found = await User.findOne({ reporterId }).select('_id').lean();
       if (!found) break;
-      reporterId = makeReporterId();
+      reporterId = await generateReporterId();
     }
 
     // if avatar uploaded, save path; persist region and pressRole if provided

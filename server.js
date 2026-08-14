@@ -10,6 +10,8 @@ const authRoutes = require('./routes/authRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const userRoutes = require('./routes/userRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const videoRoutes = require('./routes/videoRoutes');
+const publicNewsRoutes = require('./routes/publicNewsRoutes');
 const path = require('path');
 const News = require('./models/News');
 const objectStorage = require('./services/objectStorage');
@@ -34,7 +36,7 @@ try {
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:3000", "http://moradabadujala.in","https://moradabadujala.in"],
+  origin: ["http://localhost:3000", "http://rrnewstv.com","https://rrnewstv.com", "http://www.rrnewstv.com", "https://www.rrnewstv.com", "https://moradabadujala.com", "https://www.moradabadujala.com"],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }));
@@ -45,9 +47,10 @@ app.use(morgan('dev'));
 // Routes
 app.get('/', (req, res) => {
   res.json({
-    message: 'Welcome to Moradabad Ujala News',
+    message: 'Welcome to RR NEWS TV FASTEST UPDATE',
     endpoints: {
       news: '/api/news',
+      videos: '/api/videos',
       categories: '/api/categories',
       breaking: '/api/news/breaking',
       featured: '/api/news/featured',
@@ -62,6 +65,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/videos', videoRoutes);
+app.use('/api/public-news', publicNewsRoutes);
+app.use('/api/news/public', publicNewsRoutes);
 
 // Image proxy to avoid browser CORS issues when fetching images from R2/public dev URLs
 // Usage: GET /api/images/proxy?key=uploads/filename.jpg  OR  /api/images/proxy?url=https://...

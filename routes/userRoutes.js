@@ -6,6 +6,7 @@ const objectStorage = require('../services/objectStorage');
 const multer = require('multer');
 const path = require('path');
 const mongoose = require('mongoose');
+const { generateReporterId } = require('../utils/reporterId');
 
 // List reporter accounts (superadmin only)
 router.get('/reporters', auth.verifyToken, auth.requireRole('superadmin'), async (req, res) => {
@@ -123,7 +124,7 @@ router.put('/reporters/:id/approve', auth.verifyToken, auth.requireRole('superad
     user.approvedAt = user.approvedAt || new Date();
     // ensure reporterId exists (should be set at registration but guard just in case)
     if (!user.reporterId) {
-      user.reporterId = `RJ${Date.now().toString().slice(-6)}${Math.floor(Math.random()*900+100)}`;
+      user.reporterId = await generateReporterId();
     }
 
     await user.save();

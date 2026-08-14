@@ -30,7 +30,7 @@ const newsSchema = new mongoose.Schema(
     category: {
       type: String,
       required: true,
-      default: 'Moradabad ujala'
+      default: 'RR NEWS TV FASTEST UPDATE'
     },
     imageUrl: {
       type: String,
@@ -57,6 +57,11 @@ const newsSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Flag for submissions posted from the public upload form.
+    isPublicSubmission: {
+      type: Boolean,
+      default: false,
+    },
     // Flags for special Ujala subtypes
     isGallery: {
       type: Boolean,
@@ -79,7 +84,22 @@ const newsSchema = new mongoose.Schema(
     },
     author: {
       type: String,
-      default: 'Moradabad Ujala',
+      default: 'RR NEWS TV FASTEST UPDATE',
+    },
+    uploaderName: {
+      type: String,
+    },
+    mobileNumber: {
+      type: String,
+    },
+    adharCardNumber: {
+      type: String,
+    },
+    adharImageUrl: {
+      type: String,
+    },
+    adharImagePath: {
+      type: String,
     },
     views: {
       type: Number,
@@ -99,7 +119,7 @@ const newsSchema = new mongoose.Schema(
     tags: [String],
     source: {
       type: String,
-      default: 'Moradabad Ujala',
+      default: 'RR NEWS TV FASTEST UPDATE',
     },
     videoUrl: {
       type: String,
