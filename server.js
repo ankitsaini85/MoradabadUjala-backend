@@ -36,7 +36,7 @@ try {
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:3000", "http://rrnewstv.com","https://rrnewstv.com", "http://www.rrnewstv.com", "https://www.rrnewstv.com", "https://moradabadujala.com", "https://www.moradabadujala.com"],
+  origin: ["http://localhost:3000", "http://rrnewstv.com","https://rrnewstv.com", "http://www.rrnewstv.com", "https://www.rrnewstv.com"],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }));
