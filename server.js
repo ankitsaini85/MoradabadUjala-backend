@@ -69,21 +69,6 @@ app.use('/api/videos', videoRoutes);
 app.use('/api/public-news', publicNewsRoutes);
 app.use('/api/news/public', publicNewsRoutes);
 
-// React frontend
-const FRONTEND_PATH =
-  '/home/u113860049/domains/rrnewstv.com/public_html';
-
-app.use(express.static(FRONTEND_PATH));
-
-app.use((req, res, next) => {
-  if (req.method === 'GET' && !req.path.startsWith('/api')) {
-    return res.sendFile(path.join(FRONTEND_PATH, 'index.html'));
-  }
-
-  next();
-});
-
-
 // Image proxy to avoid browser CORS issues when fetching images from R2/public dev URLs
 // Usage: GET /api/images/proxy?key=uploads/filename.jpg  OR  /api/images/proxy?url=https://...
 app.get('/api/images/proxy', async (req, res) => {
@@ -223,6 +208,22 @@ app.get('/api/share/:slug', (req, res) => {
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
+});
+
+// React frontend (must come after /uploads, /share, /r and /api routes above,
+// otherwise this catch-all would swallow those requests and return index.html
+// for images/uploads/share links instead of the real response).
+const FRONTEND_PATH =
+  '/home/u113860049/domains/rrnewstv.com/public_html';
+
+app.use(express.static(FRONTEND_PATH));
+
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    return res.sendFile(path.join(FRONTEND_PATH, 'index.html'));
+  }
+
+  next();
 });
 
 // Error handling middleware

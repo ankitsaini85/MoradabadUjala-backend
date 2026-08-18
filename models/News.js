@@ -163,11 +163,11 @@ newsSchema.pre('save', async function (next) {
 
     try {
       // Preserve Unicode letters (e.g., Hindi) when generating slugs.
-      // Normalize to separate diacritics, remove combining marks, then strip anything
-      // that's not a Unicode letter, number, space or hyphen.
+      // NOTE: Do NOT strip combining marks (\p{M}) here — in Devanagari (Hindi)
+      // the matras (vowel signs like ि, ी, ु, ू) are combining marks and are
+      // essential to the word; removing them mangles the text into garbage.
+      // Only strip characters that aren't letters, numbers, spaces or hyphens.
       let slug = String(this.title).toLowerCase();
-      if (slug.normalize) slug = slug.normalize('NFKD').replace(/\p{M}/gu, '');
-      // allow Unicode letters (\p{L}) and numbers (\p{N}), spaces and hyphens
       slug = slug.replace(/[^\p{L}\p{N}\s-]+/gu, '');
       slug = slug.replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
       if (!slug) slug = 'item-' + Date.now() + '-' + Math.round(Math.random() * 1e6);
