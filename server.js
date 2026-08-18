@@ -45,19 +45,19 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(morgan('dev'));
 
 // Routes
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Welcome to RR NEWS TV FASTEST UPDATE',
-    endpoints: {
-      news: '/api/news',
-      videos: '/api/videos',
-      categories: '/api/categories',
-      breaking: '/api/news/breaking',
-      featured: '/api/news/featured',
-      trending: '/api/news/trending',
-    },
-  });
-});
+// app.get('/', (req, res) => {
+//   res.json({
+//     message: 'Welcome to RR NEWS TV FASTEST UPDATE',
+//     endpoints: {
+//       news: '/api/news',
+//       videos: '/api/videos',
+//       categories: '/api/categories',
+//       breaking: '/api/news/breaking',
+//       featured: '/api/news/featured',
+//       trending: '/api/news/trending',
+//     },
+//   });
+// });
 
 app.use('/api/news', newsRoutes);
 app.use('/api/categories', categoryRoutes);
